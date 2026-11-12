@@ -545,7 +545,7 @@ async function handleDepartmentGroupMessage(message: any, updateId: string) {
       normalizeName(String(r.fields?.["fldeOw0yyQ4o3iPlR"] ?? "")) === requestedName
     );
     if (!departmentToRegister) {
-      await sendText(chatId, "اسم القسم غير صحيح. استخدم: التسويق أو التشغيل أو البرمجة.");
+      await sendText(chatId, "اسم القسم غير صحيح. استخدم: التسويق أو التشغيل أو البرمجة أو المبيعات.");
       return;
     }
     await airtable(`${encodeURIComponent(DEPT_TABLE)}/${departmentToRegister.id}`, {
