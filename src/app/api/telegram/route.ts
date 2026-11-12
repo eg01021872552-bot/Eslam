@@ -425,7 +425,7 @@ async function handlePrivateMessage(message: any, updateId: string) {
   if (linkState !== "مرتبط") return startLink(chatId);
   const text = String(message.text ?? "").trim();
   if (text === "/start" || text === "/menu") return showMenu(chatId, employee);
-  if (text === "/new") return handleNew(chatId);
+  if (text === "/new") return handleNew(chatId, employee);
   if (text === "/cancel") {
     await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
     return sendText(chatId, "تم إلغاء الإرسال.");
@@ -440,7 +440,7 @@ async function handlePrivateMessage(message: any, updateId: string) {
   } else {
     target = null; // Default free-form message is sent to management.
   }
-  const isAdmin = fromId === env("ADMIN_TELEGRAM_ID") || ["مدير", "مدير النظام"].includes(String(employee.fields?.[EMP_ROLE]?.name ?? employee.fields?.[EMP_ROLE] ?? ""));
+  const isAdmin = isGlobalAdmin(employee, fromId);
   let recipientId = "";
   let recipientName = "";
   if (target) {
