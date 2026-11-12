@@ -163,6 +163,13 @@ async function handleContact(message: any) {
   const all = await employees();
   const phone = normalizePhone(String(contact.phone_number ?? ""));
   const match = all.find((r: any) => normalizePhone(String(r.fields?.[EMP_PHONE] ?? "")) === phone);
+  if (match) {
+    const alreadyLinked = String(match.fields?.[EMP_TG] ?? match.fields?.[EMP_CHAT] ?? "");
+    if (alreadyLinked && alreadyLinked !== String(message.from.id)) {
+      await sendText(message.chat.id, "حساب الموظف مرتبط مسبقاً بحساب تيليجرام آخر. اطلب من الإدارة مراجعة الربط.");
+      return;
+    }
+  }
   if (!match) {
     await sendText(message.chat.id, "ما لقينا رقمك ضمن سجلات الموظفين. تواصل مع الإدارة لتفعيل حسابك.");
     return;
