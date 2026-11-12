@@ -163,7 +163,11 @@ ${body}
 
 رقم المراسلة: ${record.id}`;
   await sendText(groupId, caption, { reply_markup: { inline_keyboard: [[{ text: "الرد على الموظف", callback_data: `reply:${record.id}` }]] } });
-  if (source && hasCopyableContent(source)) await copyMessage(groupId, source.chat.id, source.message_id);
+  if (source && hasCopyableContent(source)) {
+    await copyMessage(groupId, source.chat.id, source.message_id, {
+      reply_markup: { inline_keyboard: [[{ text: "الرد على الموظف", callback_data: `reply:${record.id}` }]] },
+    });
+  }
 }
 
 async function deliver(record: any, recipientId: string, body: string, senderName: string, recipientName: string, source?: any) {
@@ -205,7 +209,7 @@ async function handleContact(message: any) {
   const phone = normalizePhone(String(contact.phone_number ?? ""));
   const match = all.find((r: any) => normalizePhone(String(r.fields?.[EMP_PHONE] ?? "")) === phone);
   if (match) {
-    const alreadyLinked = String(match.fields?.[EMP_TG] ?? match.fields?.[EMP_CHAT] ?? "");
+    const alreadyLinked = String(match.fields?.[EMP_TG] || match.fields?.[EMP_CHAT] || "");
     if (alreadyLinked && alreadyLinked !== String(message.from.id)) {
       await sendText(message.chat.id, "حساب الموظف مرتبط مسبقاً بحساب تيليجرام آخر. اطلب من الإدارة مراجعة الربط.");
       return;
