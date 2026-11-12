@@ -311,7 +311,7 @@ async function handleNew(chatId: number, employee: any) {
 
 async function sendInbox(chatId: number, employee: any, actorId: string) {
   const globalAdmin = isGlobalAdmin(employee, actorId);
-  const q = new URLSearchParams({ pageSize: globalAdmin ? "100" : "100", "sort[0][field]": "تاريخ ووقت الإرسال", "sort[0][direction]": "desc", returnFieldsByFieldId: "true" });
+  const q = new URLSearchParams({ pageSize: "100", "sort[0][field]": "تاريخ ووقت الإرسال", "sort[0][direction]": "desc", returnFieldsByFieldId: "true" });
   const result = await airtable(`${encodeURIComponent(MSG)}?${q}`);
   const allRecords = result.records ?? [];
   const records = (globalAdmin ? allRecords : allRecords.filter((r: any) =>
@@ -321,7 +321,7 @@ async function sendInbox(chatId: number, employee: any, actorId: string) {
   if (!records.length) return sendText(chatId, "ما فيه مراسلات مسجلة ضمن صلاحياتك.");
   const lines = records.map((r: any) => `من ${r.fields?.fldXGMB1LYq0p0XUj ?? "—"} إلى ${r.fields?.fldblgGsIlHJXVjH4 ?? "—"}: ${String(r.fields?.fldn8q8IJ6PwfTo2a ?? "").slice(0, 90)}`);
   const keyboard = records.map((r: any, i: number) => ([{ text: `عرض المراسلة ${i + 1}`, callback_data: `view:${r.id}` }]));
-  await sendText(chatId, `سجل مراسلات القسم:\n\n${lines.join("\n\n")}\n\nاختر مراسلة لعرض محتواها ومرفقاتها.`, { reply_markup: { inline_keyboard: keyboard } });
+  await sendText(chatId, `سجل مراسلاتك:\n\n${lines.join("\n\n")}\n\nاختر مراسلة لعرض محتواها ومرفقاتها.`, { reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function handleCallback(query: any) {
