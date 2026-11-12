@@ -198,9 +198,43 @@ async function showMenu(chatId: number, employee: any) {
 }
 
 async function startLink(chatId: number) {
-  await sendText(chatId, "لربط حسابك، اضغط مشاركة رقم الجوال المسجل لدى الشركة.", {
-    reply_markup: { keyboard: [[{ text: "مشاركة رقم الجوال", request_contact: true }]], resize_keyboard: true, one_time_keyboard: true },
-  });
+  await sendText(chatId, "لربط حسابك، اكتب اسمك الكامل كما هو مسجل في الشركة. لا تحتاج لمشاركة رقم الجوال.");
+}
+
+function normalizeName(value: string) {
+  return value.normalize("NFKC").replace(/[\u064B-\u065F\u0670\u0640]/g, "")
+    .replace(/[أإآ]/g, "ا").replace(/ى/g, "ي").replace(/ة/g, "ه")
+    .replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+async function linkEmployeeByName(chatId: number, fromId: string, inputName: string) {
+  const wanted = normalizeName(inputName.replace(/^\/start\s*/i, ""));
+  if (!wanted || wanted.length < 2) {
+    await startLink(chatId);
+    return;
+  }
+  const all = await employees();
+  const matches = all.filter((r: any) => normalizeName(String(r.fields?.[EMP_NAME] ?? "")) === wanted);
+  if (matches.length !== 1) {
+    await sendText(chatId, matches.length > 1
+      ? "الاسم متكرر في سجلات الشركة. اكتب اسمك الثلاثي أو الرباعي كما هو مسجل."
+      : "ما لقينا الاسم في سجلات الموظفين. اكتب الاسم الكامل كما هو مسجل في الشركة.");
+    return;
+  }
+  const match = matches[0];
+  const existing = String(match.fields?.[EMP_TG] ?? match.fields?.[EMP_CHAT] ?? "");
+  if (existing && existing !== fromId) {
+    await sendText(chatId, "هذا الاسم مرتبط بحساب تيليجرام آخر. تواصل مع الإدارة لمراجعة الربط.");
+    return;
+  }
+  const already = await employeeByTelegram(fromId);
+  if (already && already.id !== match.id) {
+    await sendText(chatId, "حساب تيليجرام هذا مرتبط بموظف آخر. تواصل مع الإدارة.");
+    return;
+  }
+  await updateEmployee(match.id, { [EMP_TG]: fromId, [EMP_CHAT]: String(chatId), [EMP_LINK]: "مرتبط", [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
+  await sendText(chatId, `تم ربط حسابك بنجاح يا ${nameOf(match)}.`);
+  await showMenu(chatId, match);
 }
 
 async function handleContact(message: any) {
@@ -304,11 +338,14 @@ async function handleCallback(query: any) {
 async function handlePrivateMessage(message: any, updateId: string) {
   const fromId = String(message.from.id);
   const chatId = message.chat.id;
-  if (message.contact) return handleContact(message);
+  if (message.contact) {
+    await sendText(chatId, "لربط حسابك بالاسم، أرسل /start ثم اكتب اسمك الكامل كما هو مسجل بالشركة.");
+    return;
+  }
   let employee = await employeeByTelegram(fromId);
   if (!employee) {
     if (message.text === "/start") return startLink(chatId);
-    return sendText(chatId, "حسابك غير مربوط. أرسل /start ثم شارك رقم جوالك المسجل بالشركة.");
+    return linkEmployeeByName(chatId, fromId, String(message.text ?? ""));
   }
   if (!isActiveEmployee(employee)) return sendText(chatId, "حسابك غير نشط حالياً. تواصل مع الإدارة.");
   const linkState = employee.fields?.[EMP_LINK]?.name ?? employee.fields?.[EMP_LINK];
