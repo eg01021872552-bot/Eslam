@@ -375,9 +375,9 @@ async function handleGroupReply(message: any, updateId: string) {
   });
   if (record._alreadyHandled && record.fields?.["fldZV0JboWBmWE4ns"] === "تم التسليم") return;
   try {
-    await sendText(originalSenderId, `رد الإدارة:\\n\\n${body}`, {
-      reply_markup: { inline_keyboard: [[{ text: "الرد على الإدارة", callback_data: `reply:${record.id}` }]] },
-    });
+    const replyKeyboard = { reply_markup: { inline_keyboard: [[{ text: "الرد على الإدارة", callback_data: `reply:${record.id}` }]] } };
+    if (hasCopyableContent(message)) await copyMessage(originalSenderId, message.chat.id, message.message_id, replyKeyboard);
+    else await sendText(originalSenderId, `رد الإدارة:\\n\\n${body}`, replyKeyboard);
     await setMessageStatus(record.id, "تم التسليم");
   } catch (error) {
     await setMessageStatus(record.id, "فشل الإرسال", String(error));
