@@ -16,6 +16,9 @@ const EMP_STATUS = "fldcHCNDppjSdoaT6";
 const EMP_LINK = "fld4GJUS7j41jFXcU";
 const EMP_MODE = "fld0XUBzsCx1MaEqO";
 const EMP_TARGET = "fldCYKrXjNEDfSyrg";
+const EMP_DEPT = "fldKpcxqlBQvb6ghN";
+const MSG_DEPT = "fldkwTgS7wPqSJpV6";
+const DEPT_TABLE = "tblfmch4vVWwJnFO1";
 
 async function airtable(path: string, init: RequestInit = {}) {
   const token = env("AIRTABLE_API_TOKEN");
@@ -99,6 +102,30 @@ function hasCopyableContent(message: any) {
   return Boolean(message.photo || message.video || message.document || message.voice || message.audio || message.video_note || message.sticker || message.animation || message.location || message.contact || message.poll);
 }
 
+function departmentIdOf(employee: any): string {
+  const value = employee?.fields?.[EMP_DEPT];
+  if (Array.isArray(value)) return String(value[0]?.id ?? value[0] ?? "");
+  return String(value?.id ?? value ?? "");
+}
+function isGlobalAdmin(employee: any, actorId?: string): boolean {
+  const role = String(employee?.fields?.[EMP_ROLE]?.name ?? employee?.fields?.[EMP_ROLE] ?? "");
+  return role === "مدير النظام" || (!!actorId && actorId === env("ADMIN_TELEGRAM_ID"));
+}
+async function departmentName(id: string): Promise<string> {
+  if (!id) return "";
+  const record = await airtable(`${encodeURIComponent(DEPT_TABLE)}/${id}?returnFieldsByFieldId=true`);
+  return String(record.fields?.["fldeOw0yyQ4o3iPlR"] ?? "");
+}
+function messageDepartmentIds(record: any): string[] {
+  const value = record?.fields?.[MSG_DEPT];
+  if (!Array.isArray(value)) return value ? [String(value.id ?? value)] : [];
+  return value.map((v: any) => String(v?.id ?? v)).filter(Boolean);
+}
+function canAccessMessage(employee: any, record: any, actorId: string): boolean {
+  if (isGlobalAdmin(employee, actorId)) return true;
+  const deptId = departmentIdOf(employee);
+  return !!deptId && messageDepartmentIds(record).includes(deptId);
+}
 function isActiveEmployee(employee: any) {
   const status = employee?.fields?.[EMP_STATUS]?.name ?? employee?.fields?.[EMP_STATUS];
   return status === "على رأس العمل";
@@ -119,7 +146,7 @@ function normalizePhone(value: string) {
 async function saveMessage(args: {
   key: string; senderName: string; recipientName: string; body: string;
   senderId: string; recipientId: string; telegramMessageId?: string;
-  kind?: string; destination?: string;
+  departmentId: string; kind?: string; destination?: string;
 }) {
   const existingQuery = new URLSearchParams({
     filterByFormula: `{رقم المراسلة}='${formulaValue(args.key)}'`,
@@ -141,6 +168,7 @@ async function saveMessage(args: {
     "fldBr35okGCqh66Zo": args.recipientId,
     "fld6YPZNzvd3m1u97": args.telegramMessageId ?? "",
     "fldnTKFg2r0Nzk4zi": args.destination ?? "خاص",
+    [MSG_DEPT]: [args.departmentId],
   };
   const data = await airtable(`${encodeURIComponent(MSG)}?returnFieldsByFieldId=true`, { method: "POST", body: JSON.stringify({ records: [{ fields }] }) });
   return data.records?.[0];
@@ -152,24 +180,25 @@ async function setMessageStatus(recordId: string, status: string, note?: string)
   await airtable(`${encodeURIComponent(MSG)}/${recordId}`, { method: "PATCH", body: JSON.stringify({ fields }) });
 }
 
-async function announceInGroup(record: any, body: string, senderName: string, recipientName: string, source?: any) {
-  const groupId = env("COMPANY_GROUP_CHAT_ID");
-  if (!groupId) return;
-  const caption = `مراسلة داخلية
-من: ${senderName}
-إلى: ${recipientName}
-
-${body}
-
-رقم المراسلة: ${record.id}`;
-  await sendText(groupId, caption, { reply_markup: { inline_keyboard: [[{ text: "الرد على الموظف", callback_data: `reply:${record.id}` }]] } });
-  if (source && hasCopyableContent(source)) {
-    await copyMessage(groupId, source.chat.id, source.message_id, {
-      reply_markup: { inline_keyboard: [[{ text: "الرد على الموظف", callback_data: `reply:${record.id}` }]] },
-    });
+async function notifyDepartment(record: any, body: string, senderName: string, recipientName: string, source: any, departmentId: string) {
+  const recipients = new Set<string>();
+  const adminId = env("ADMIN_TELEGRAM_ID");
+  if (adminId) recipients.add(adminId);
+  const staff = await employees();
+  for (const person of staff) {
+    const role = String(person.fields?.[EMP_ROLE]?.name ?? person.fields?.[EMP_ROLE] ?? "");
+    if (role !== "مدير" || departmentIdOf(person) !== departmentId) continue;
+    const chat = String(person.fields?.[EMP_CHAT] || person.fields?.[EMP_TG] || "");
+    if (chat) recipients.add(chat);
+  }
+  recipients.delete(String(source?.from?.id ?? ""));
+  for (const chat of recipients) {
+    try {
+      if (source && hasCopyableContent(source)) await copyMessage(chat, source.chat.id, source.message_id);
+      else await sendText(chat, `إشعار قسم: ${senderName} إلى ${recipientName}\n\n${body}\n\nرقم المراسلة: ${record.id}`);
+    } catch (error) { console.error("Department notification failed", error); }
   }
 }
-
 async function deliver(record: any, recipientId: string, body: string, senderName: string, recipientName: string, source?: any) {
   try {
     const keyboard = { reply_markup: { inline_keyboard: [[{ text: "رد على الرسالة", callback_data: `reply:${record.id}` }]] } };
@@ -179,8 +208,8 @@ async function deliver(record: any, recipientId: string, body: string, senderNam
 
 ${body}`, keyboard);
     await setMessageStatus(record.id, "تم التسليم");
-    try { await announceInGroup(record, body, senderName, recipientName, source); }
-    catch (e) { console.error("Group copy failed", e); await setMessageStatus(record.id, "تم التسليم", "وصلت للمستلم، وتعذر إرسال نسخة الجروب"); }
+    try { await notifyDepartment(record, body, senderName, recipientName, source, String(record.fields?.[MSG_DEPT]?.[0] ?? "")); }
+    catch (e) { console.error("Department notification failed", e); }
     return sent;
   } catch (e) {
     await setMessageStatus(record.id, "فشل الإرسال", String(e));
@@ -190,7 +219,7 @@ ${body}`, keyboard);
 
 async function showMenu(chatId: number, employee: any) {
   const role = String(employee.fields?.[EMP_ROLE]?.name ?? employee.fields?.[EMP_ROLE] ?? "");
-  const isAdmin = ["مدير", "مدير النظام"].includes(role);
+  const isAdmin = isGlobalAdmin(employee, String(employee.fields?.[EMP_TG] ?? ""));
   const rows = [[{ text: "إرسال رسالة لموظف", callback_data: "new" }]];
   if (!isAdmin) rows.push([{ text: "مراسلة الإدارة", callback_data: "management" }]);
   rows.push([{ text: "مراسلاتي", callback_data: "inbox" }]);
@@ -262,11 +291,36 @@ async function handleContact(message: any) {
   await showMenu(message.chat.id, match);
 }
 
-async function handleNew(chatId: number) {
+async function handleNew(chatId: number, employee: any) {
   const list = await employees();
-  const rows = list.filter((r: any) => r.fields?.[EMP_TG] || r.fields?.[EMP_CHAT]).map((r: any) => ([{ text: nameOf(r), callback_data: `to:${r.id}` }]));
+  const globalAdmin = isGlobalAdmin(employee, String(employee.fields?.[EMP_TG] ?? ""));
+  const ownDepartment = departmentIdOf(employee);
+  const rows = list.filter((r: any) =>
+    r.id !== employee.id &&
+    (r.fields?.[EMP_TG] || r.fields?.[EMP_CHAT]) &&
+    (globalAdmin || (!!ownDepartment && departmentIdOf(r) === ownDepartment))
+  ).map((r: any) => ([{ text: nameOf(r), callback_data: `to:${r.id}` }]));
   if (!rows.length) return sendText(chatId, "ما فيه موظفين مرتبطين بالبوت حتى الآن.");
   await sendText(chatId, "اختر الموظف اللي تبي تراسله:", { reply_markup: { inline_keyboard: rows.slice(0, 90) } });
+}
+
+async function sendInbox(chatId: number, employee: any, actorId: string) {
+  const globalAdmin = isGlobalAdmin(employee, actorId);
+  let formula = "TRUE()";
+  if (!globalAdmin) {
+    const deptId = departmentIdOf(employee);
+    if (!deptId) return sendText(chatId, "حسابك غير مرتبط بقسم. تواصل مع الإدارة لتفعيل صلاحياتك.");
+    const deptName = await departmentName(deptId);
+    if (!deptName) return sendText(chatId, "تعذر تحديد قسم حسابك. تواصل مع الإدارة.");
+    formula = `FIND('${formulaValue(deptName)}', ARRAYJOIN({اسم القسم}))>0`;
+  }
+  const q = new URLSearchParams({ filterByFormula: formula, pageSize: "10", "sort[0][field]": "تاريخ ووقت الإرسال", "sort[0][direction]": "desc", returnFieldsByFieldId: "true" });
+  const result = await airtable(`${encodeURIComponent(MSG)}?${q}`);
+  const records = result.records ?? [];
+  if (!records.length) return sendText(chatId, "ما فيه مراسلات مسجلة ضمن صلاحياتك.");
+  const lines = records.map((r: any) => `من ${r.fields?.fldXGMB1LYq0p0XUj ?? "—"} إلى ${r.fields?.fldblgGsIlHJXVjH4 ?? "—"}: ${String(r.fields?.fldn8q8IJ6PwfTo2a ?? "").slice(0, 90)}`);
+  const keyboard = records.map((r: any, i: number) => ([{ text: `عرض المراسلة ${i + 1}`, callback_data: `view:${r.id}` }]));
+  await sendText(chatId, `سجل مراسلات القسم:\n\n${lines.join("\n\n")}\n\nاختر مراسلة لعرض محتواها ومرفقاتها.`, { reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function handleCallback(query: any) {
@@ -280,7 +334,7 @@ async function handleCallback(query: any) {
   const data = String(query.data ?? "");
   if (data === "new") {
     await tg("answerCallbackQuery", { callback_query_id: query.id });
-    await handleNew(chatId);
+    await handleNew(chatId, employee);
     return;
   }
   if (data === "management") {
@@ -297,15 +351,16 @@ async function handleCallback(query: any) {
   }
   if (data === "inbox") {
     await tg("answerCallbackQuery", { callback_query_id: query.id });
-    const q = new URLSearchParams({ filterByFormula: `OR({معرّف المرسل السري}='${formulaValue(actorId)}',{معرّف المستلم السري}='${formulaValue(actorId)}')`, pageSize: "10", "sort[0][field]": "تاريخ ووقت الإرسال", "sort[0][direction]": "desc", returnFieldsByFieldId: "true" });
-    const result = await airtable(`${encodeURIComponent(MSG)}?${q}`);
-    const lines = (result.records ?? []).map((r: any) => `• ${r.fields?.fldXGMB1LYq0p0XUj ?? "—"} ← ${r.fields?.fldblgGsIlHJXVjH4 ?? "—"}: ${String(r.fields?.fldn8q8IJ6PwfTo2a ?? "").slice(0, 160)}`);
-    await sendText(chatId, lines.length ? `آخر مراسلاتك:\n\n${lines.join("\n")}` : "ما عندك مراسلات سابقة.");
+    await sendInbox(chatId, employee, actorId);
     return;
   }
   if (data.startsWith("to:")) {
     const target = await employeeByRecord(data.slice(3));
     const targetId = String(target.fields?.[EMP_TG] || target.fields?.[EMP_CHAT] || "");
+    if (!isActiveEmployee(target) || (!isGlobalAdmin(employee, actorId) && (!departmentIdOf(employee) || departmentIdOf(employee) !== departmentIdOf(target)))) {
+      await tg("answerCallbackQuery", { callback_query_id: query.id, text: "ما عندك صلاحية مراسلة موظف خارج قسمك", show_alert: true });
+      return;
+    }
     if (!targetId || targetId === actorId) {
       await tg("answerCallbackQuery", { callback_query_id: query.id, text: "الموظف غير مرتبط أو لا يمكن مراسلة نفسك", show_alert: true });
       return;
@@ -315,11 +370,28 @@ async function handleCallback(query: any) {
     await sendText(chatId, `اكتب رسالتك إلى ${nameOf(target)} الآن. للإلغاء أرسل /cancel`);
     return;
   }
+  if (data.startsWith("view:")) {
+    const record = await airtable(`${encodeURIComponent(MSG)}/${data.slice(5)}?returnFieldsByFieldId=true`);
+    if (!canAccessMessage(employee, record, actorId)) {
+      await tg("answerCallbackQuery", { callback_query_id: query.id, text: "ما عندك صلاحية الاطلاع على هذه المراسلة", show_alert: true });
+      return;
+    }
+    const sender = String(record.fields?.["fldKgUavji53gIds5"] ?? "");
+    const messageId = Number(record.fields?.["fld6YPZNzvd3m1u97"] ?? 0);
+    if (sender && messageId) await copyMessage(chatId, sender, messageId);
+    else await sendText(chatId, String(record.fields?.["fldn8q8IJ6PwfTo2a"] ?? "لا يوجد محتوى محفوظ."));
+    await tg("answerCallbackQuery", { callback_query_id: query.id });
+    return;
+  }
   if (data.startsWith("reply:")) {
     const original = await airtable(`${encodeURIComponent(MSG)}/${data.slice(6)}?returnFieldsByFieldId=true`);
     const originalSender = String(original.fields?.["fldKgUavji53gIds5"] ?? "");
     const originalRecipient = String(original.fields?.["fldBr35okGCqh66Zo"] ?? "");
-    const admin = actorId === env("ADMIN_TELEGRAM_ID") || ["مدير", "مدير النظام"].includes(String(employee.fields?.[EMP_ROLE]?.name ?? employee.fields?.[EMP_ROLE] ?? ""));
+    const admin = isGlobalAdmin(employee, actorId);
+    if (!canAccessMessage(employee, original, actorId)) {
+      await tg("answerCallbackQuery", { callback_query_id: query.id, text: "هذه المراسلة خارج نطاق قسمك", show_alert: true });
+      return;
+    }
     if (actorId !== originalRecipient && !admin) {
       await tg("answerCallbackQuery", { callback_query_id: query.id, text: "ما عندك صلاحية الرد على هذه الرسالة", show_alert: true });
       return;
@@ -348,6 +420,7 @@ async function handlePrivateMessage(message: any, updateId: string) {
     return linkEmployeeByName(chatId, fromId, String(message.text ?? ""));
   }
   if (!isActiveEmployee(employee)) return sendText(chatId, "حسابك غير نشط حالياً. تواصل مع الإدارة.");
+  if (!isGlobalAdmin(employee, fromId) && !departmentIdOf(employee)) return sendText(chatId, "حسابك غير مرتبط بقسم. تواصل مع الإدارة لتفعيل صلاحياتك.");
   const linkState = employee.fields?.[EMP_LINK]?.name ?? employee.fields?.[EMP_LINK];
   if (linkState !== "مرتبط") return startLink(chatId);
   const text = String(message.text ?? "").trim();
@@ -357,12 +430,7 @@ async function handlePrivateMessage(message: any, updateId: string) {
     await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
     return sendText(chatId, "تم إلغاء الإرسال.");
   }
-  if (text === "/inbox") {
-    const q = new URLSearchParams({ filterByFormula: `OR({معرّف المرسل السري}='${formulaValue(fromId)}',{معرّف المستلم السري}='${formulaValue(fromId)}')`, pageSize: "10", "sort[0][field]": "تاريخ ووقت الإرسال", "sort[0][direction]": "desc", returnFieldsByFieldId: "true" });
-    const result = await airtable(`${encodeURIComponent(MSG)}?${q}`);
-    const lines = (result.records ?? []).map((r: any) => `• ${r.fields?.fldXGMB1LYq0p0XUj ?? "—"} ← ${r.fields?.fldblgGsIlHJXVjH4 ?? "—"}: ${String(r.fields?.fldn8q8IJ6PwfTo2a ?? "").slice(0, 160)}`);
-    return sendText(chatId, lines.length ? `آخر مراسلاتك:\n\n${lines.join("\n")}` : "ما عندك مراسلات سابقة.");
-  }
+  if (text === "/inbox") return sendInbox(chatId, employee, fromId);
   const body = messageBody(message);
   if (!body) return sendText(chatId, "أرسل نصاً أو مرفقاً مدعوماً. أرسل /menu لعرض الخيارات.");
   const mode = employee.fields?.[EMP_MODE]?.name ?? employee.fields?.[EMP_MODE] ?? "لا شيء";
@@ -376,6 +444,10 @@ async function handlePrivateMessage(message: any, updateId: string) {
   let recipientId = "";
   let recipientName = "";
   if (target) {
+    if (!isGlobalAdmin(employee, fromId) && departmentIdOf(employee) !== departmentIdOf(target)) {
+      await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
+      return sendText(chatId, "لا يمكن إرسال مراسلات خارج قسمك.");
+    }
     recipientId = String(target.fields?.[EMP_TG] || target.fields?.[EMP_CHAT] || "");
     recipientName = nameOf(target);
   } else if (isAdmin) {
@@ -386,7 +458,9 @@ async function handlePrivateMessage(message: any, updateId: string) {
     recipientName = "الإدارة";
   }
   if (!recipientId) return sendText(chatId, "ما قدرنا نحدد حساب المستلم. تواصل مع الإدارة.");
-  const record = await saveMessage({ key: `TG-${updateId}`, senderName: nameOf(employee), recipientName, body, senderId: fromId, recipientId, telegramMessageId: String(message.message_id) });
+  const messageDepartmentId = target ? departmentIdOf(target) : departmentIdOf(employee);
+  if (!messageDepartmentId) return sendText(chatId, "تعذر تحديد القسم المرتبط بهذه المراسلة.");
+  const record = await saveMessage({ key: `TG-${updateId}`, senderName: nameOf(employee), recipientName, body, senderId: fromId, recipientId, telegramMessageId: String(message.message_id), departmentId: messageDepartmentId });
   await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
   if (record._alreadyHandled && record.fields?.["fldZV0JboWBmWE4ns"] === "تم التسليم") {
     return sendText(chatId, "تم استلام رسالتك وإرسالها مسبقاً.");
@@ -435,6 +509,7 @@ async function handleGroupReply(message: any, updateId: string) {
     senderId: actorId,
     recipientId: originalSenderId,
     telegramMessageId: String(message.message_id),
+    departmentId: departmentIdOf(originalEmployee),
   });
   if (record._alreadyHandled && record.fields?.["fldZV0JboWBmWE4ns"] === "تم التسليم") return;
   try {
@@ -454,7 +529,7 @@ async function saveGroupMessage(message: any, updateId: string) {
   const employee = await employeeByTelegram(senderId);
   const body = messageBody(message);
   if (!body || !employee) return;
-  const record = await saveMessage({ key: `TG-GROUP-${updateId}`, senderName: nameOf(employee), recipientName: "مجموعة الشركة", body, senderId, recipientId: env("ADMIN_TELEGRAM_ID"), telegramMessageId: String(message.message_id), kind: "إعلان عام", destination: "المجموعة" });
+  const record = await saveMessage({ key: `TG-GROUP-${updateId}`, senderName: nameOf(employee), recipientName: "مجموعة الشركة", body, senderId, recipientId: env("ADMIN_TELEGRAM_ID"), telegramMessageId: String(message.message_id), departmentId: departmentIdOf(employee), kind: "إعلان عام", destination: "المجموعة" });
   await setMessageStatus(record.id, "تم التسليم");
 }
 
@@ -501,11 +576,7 @@ export async function POST(request: NextRequest) {
     if (!message?.chat || !message?.from || message.from.is_bot) return NextResponse.json({ ok: true });
     const groupId = env("COMPANY_GROUP_CHAT_ID");
     if (String(message.chat.id) === String(groupId)) {
-      if (message.reply_to_message) {
-        await handleGroupReply(message, String(update.update_id));
-      } else {
-        await saveGroupMessage(message, String(update.update_id));
-      }
+      // Shared company groups are excluded from confidential department correspondence.
       return NextResponse.json({ ok: true });
     }
     if (message.chat.type === "private") await handlePrivateMessage(message, String(update.update_id));
