@@ -398,9 +398,9 @@ async function saveGroupMessage(message: any, updateId: string) {
 export async function GET(request: NextRequest) {
   try {
     let info = await tg("getWebhookInfo", {});
-    const expectedUrl = new URL("/api/telegram", request.url).toString();
+    const expectedUrl = "https://etihad-almoyaser-employee-bot.vercel.app/api/telegram";
     let webhookRepaired = false;
-    if (info.url !== expectedUrl || String(info.last_error_message ?? "").includes("401 Unauthorized")) {
+    if (info.url !== expectedUrl) {
       await tg("setWebhook", {
         url: expectedUrl,
         secret_token: env("TELEGRAM_WEBHOOK_SECRET"),
@@ -418,7 +418,6 @@ export async function GET(request: NextRequest) {
       webhookMatchesEndpoint: info.url === expectedUrl,
       webhookRepaired,
       pendingUpdates: info.pending_update_count ?? 0,
-      lastWebhookError: info.last_error_message ?? null,
     });
   } catch (error) {
     console.error("Webhook health check failed", error);
