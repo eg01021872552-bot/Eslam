@@ -529,13 +529,36 @@ async function handleGroupReply(message: any, updateId: string) {
 
 async function handleDepartmentGroupMessage(message: any, updateId: string) {
   const chatId = String(message.chat.id);
-  const groups = await airtable(`${encodeURIComponent(DEPT_TABLE)}?pageSize=100&returnFieldsByFieldId=true`);
-  const department = (groups.records ?? []).find((r: any) => String(r.fields?.[DEPT_GROUP_CHAT] ?? "").trim() === chatId);
-  if (!department) return;
-  const departmentId = String(department.id);
   const senderId = String(message.from?.id ?? "");
   const employee = await employeeByTelegram(senderId);
-  if (!employee || !isActiveEmployee(employee)) return;
+  const text = String(message.text ?? "").trim();
+  const registration = text.match(/^\/register_department(?:@\w+)?\s+(.+)$/i);
+  const groups = await airtable(`${encodeURIComponent(DEPT_TABLE)}?pageSize=100&returnFieldsByFieldId=true`);
+
+  if (registration) {
+    if (!isGlobalAdmin(employee, senderId)) {
+      await sendText(chatId, "تسجيل جروبات الأقسام متاح للإدارة العليا فقط.");
+      return;
+    }
+    const requestedName = normalizeName(registration[1]);
+    const departmentToRegister = (groups.records ?? []).find((r: any) =>
+      normalizeName(String(r.fields?.["fldeOw0yyQ4o3iPlR"] ?? "")) === requestedName
+    );
+    if (!departmentToRegister) {
+      await sendText(chatId, "اسم القسم غير صحيح. استخدم: التسويق أو التشغيل أو البرمجة.");
+      return;
+    }
+    await airtable(`${encodeURIComponent(DEPT_TABLE)}/${departmentToRegister.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ fields: { [DEPT_GROUP_CHAT]: chatId } }),
+    });
+    await sendText(chatId, "تم ربط هذا الجروب بقسم " + String(departmentToRegister.fields?.["fldeOw0yyQ4o3iPlR"]) + ". ستُحفظ رسائل القسم في سجله المستقل.");
+    return;
+  }
+
+  const department = (groups.records ?? []).find((r: any) => String(r.fields?.[DEPT_GROUP_CHAT] ?? "").trim() === chatId);
+  if (!department || !employee || !isActiveEmployee(employee)) return;
+  const departmentId = String(department.id);
   const authorized = isGlobalAdmin(employee, senderId) || departmentIdOf(employee) === departmentId;
   if (!authorized) { await sendText(chatId, "ما عندك صلاحية استخدام جروب هذا القسم."); return; }
   const body = messageBody(message);
