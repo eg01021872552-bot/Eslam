@@ -99,6 +99,11 @@ function hasCopyableContent(message: any) {
   return Boolean(message.photo || message.video || message.document || message.voice || message.audio || message.video_note || message.sticker || message.animation || message.location || message.contact || message.poll);
 }
 
+function isActiveEmployee(employee: any) {
+  const status = employee?.fields?.[EMP_STATUS]?.name ?? employee?.fields?.[EMP_STATUS];
+  return status === "على رأس العمل";
+}
+
 function nameOf(employee: any) {
   return employee?.fields?.[EMP_NAME] ?? "موظف";
 }
@@ -226,7 +231,7 @@ async function handleCallback(query: any) {
   const actorId = String(query.from.id);
   const chatId = Number(actorId);
   const employee = await employeeByTelegram(actorId);
-  if (!employee || String(employee.fields?.[EMP_LINK]?.name ?? employee.fields?.[EMP_LINK] ?? "") !== "مرتبط") {
+  if (!employee || !isActiveEmployee(employee) || String(employee.fields?.[EMP_LINK]?.name ?? employee.fields?.[EMP_LINK] ?? "") !== "مرتبط") {
     await tg("answerCallbackQuery", { callback_query_id: query.id, text: "اربط حسابك أولاً", show_alert: true });
     return;
   }
@@ -285,6 +290,7 @@ async function handlePrivateMessage(message: any, updateId: string) {
     if (message.text === "/start") return startLink(chatId);
     return sendText(chatId, "حسابك غير مربوط. أرسل /start ثم شارك رقم جوالك المسجل بالشركة.");
   }
+  if (!isActiveEmployee(employee)) return sendText(chatId, "حسابك غير نشط حالياً. تواصل مع الإدارة.");
   const linkState = employee.fields?.[EMP_LINK]?.name ?? employee.fields?.[EMP_LINK];
   if (linkState !== "مرتبط") return startLink(chatId);
   const text = String(message.text ?? "").trim();
@@ -346,7 +352,7 @@ async function handleGroupReply(message: any, updateId: string) {
   const actorId = String(message.from.id);
   const adminRecord = await employeeByTelegram(actorId);
   const role = String(adminRecord?.fields?.[EMP_ROLE]?.name ?? adminRecord?.fields?.[EMP_ROLE] ?? "");
-  const isAdmin = actorId === env("ADMIN_TELEGRAM_ID") || ["مدير", "مدير النظام"].includes(role);
+  const isAdmin = isActiveEmployee(adminRecord) && (actorId === env("ADMIN_TELEGRAM_ID") || ["مدير", "مدير النظام"].includes(role));
   if (!isAdmin) {
     await sendText(message.chat.id, "الرد على مراسلات الموظفين متاح للإدارة فقط.");
     return;
