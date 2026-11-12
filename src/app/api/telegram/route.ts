@@ -90,6 +90,14 @@ async function saveMessage(args: {
   key: string; senderName: string; recipientName: string; body: string;
   senderId: string; recipientId: string; telegramMessageId?: string;
 }) {
+  const existingQuery = new URLSearchParams({
+    filterByFormula: `{رقم المراسلة}='${formulaValue(args.key)}'`,
+    maxRecords: "1",
+    returnFieldsByFieldId: "true",
+  });
+  const existing = await airtable(`${encodeURIComponent(MSG)}?${existingQuery}`);
+  if (existing.records?.length) return existing.records[0];
+
   const fields: Record<string, unknown> = {
     "fldPh4CNH8yUHg1ab": args.key,
     "fldXGMB1LYq0p0XUj": args.senderName,
