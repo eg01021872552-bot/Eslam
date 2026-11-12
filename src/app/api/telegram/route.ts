@@ -74,6 +74,31 @@ async function sendText(chatId: string | number, text: string, extra: Record<str
   return tg("sendMessage", { chat_id: chatId, text, ...extra });
 }
 
+async function copyMessage(chatId: string | number, fromChatId: string | number, messageId: number, extra: Record<string, unknown> = {}) {
+  return tg("copyMessage", { chat_id: chatId, from_chat_id: fromChatId, message_id: messageId, ...extra });
+}
+
+function messageBody(message: any) {
+  const caption = String(message.text ?? message.caption ?? "").trim();
+  if (caption) return caption;
+  if (message.photo) return "[صورة مرفقة]";
+  if (message.video) return "[مقطع فيديو]";
+  if (message.document) return `[مستند: ${message.document.file_name ?? "مرفق"}]`;
+  if (message.voice) return "[رسالة صوتية]";
+  if (message.audio) return "[ملف صوتي]";
+  if (message.video_note) return "[فيديو دائري]";
+  if (message.sticker) return "[ملصق]";
+  if (message.animation) return "[صورة متحركة]";
+  if (message.location) return "[موقع جغرافي]";
+  if (message.contact) return "[جهة اتصال]";
+  if (message.poll) return "[استطلاع]";
+  return "";
+}
+
+function hasCopyableContent(message: any) {
+  return Boolean(message.photo || message.video || message.document || message.voice || message.audio || message.video_note || message.sticker || message.animation || message.location || message.contact || message.poll);
+}
+
 function nameOf(employee: any) {
   return employee?.fields?.[EMP_NAME] ?? "موظف";
 }
@@ -122,20 +147,30 @@ async function setMessageStatus(recordId: string, status: string, note?: string)
   await airtable(`${encodeURIComponent(MSG)}/${recordId}`, { method: "PATCH", body: JSON.stringify({ fields }) });
 }
 
-async function announceInGroup(record: any, body: string, senderName: string, recipientName: string) {
+async function announceInGroup(record: any, body: string, senderName: string, recipientName: string, source?: any) {
   const groupId = env("COMPANY_GROUP_CHAT_ID");
   if (!groupId) return;
-  const caption = `مراسلة داخلية\nمن: ${senderName}\nإلى: ${recipientName}\n\n${body}\n\nرقم المراسلة: ${record.id}`;
+  const caption = `مراسلة داخلية
+من: ${senderName}
+إلى: ${recipientName}
+
+${body}
+
+رقم المراسلة: ${record.id}`;
   await sendText(groupId, caption, { reply_markup: { inline_keyboard: [[{ text: "الرد على الموظف", callback_data: `reply:${record.id}` }]] } });
+  if (source && hasCopyableContent(source)) await copyMessage(groupId, source.chat.id, source.message_id);
 }
 
-async function deliver(record: any, recipientId: string, body: string, senderName: string, recipientName: string) {
+async function deliver(record: any, recipientId: string, body: string, senderName: string, recipientName: string, source?: any) {
   try {
-    const sent = await sendText(recipientId, `رسالة من ${senderName}:\n\n${body}`, {
-      reply_markup: { inline_keyboard: [[{ text: "رد على الرسالة", callback_data: `reply:${record.id}` }]] },
-    });
+    const keyboard = { reply_markup: { inline_keyboard: [[{ text: "رد على الرسالة", callback_data: `reply:${record.id}` }]] } };
+    const sent = source && hasCopyableContent(source)
+      ? await copyMessage(recipientId, source.chat.id, source.message_id, keyboard)
+      : await sendText(recipientId, `رسالة من ${senderName}:
+
+${body}`, keyboard);
     await setMessageStatus(record.id, "تم التسليم");
-    try { await announceInGroup(record, body, senderName, recipientName); }
+    try { await announceInGroup(record, body, senderName, recipientName, source); }
     catch (e) { console.error("Group copy failed", e); await setMessageStatus(record.id, "تم التسليم", "وصلت للمستلم، وتعذر إرسال نسخة الجروب"); }
     return sent;
   } catch (e) {
@@ -265,7 +300,8 @@ async function handlePrivateMessage(message: any, updateId: string) {
     const lines = (result.records ?? []).map((r: any) => `• ${r.fields?.fldXGMB1LYq0p0XUj ?? "—"} ← ${r.fields?.fldblgGsIlHJXVjH4 ?? "—"}: ${String(r.fields?.fldn8q8IJ6PwfTo2a ?? "").slice(0, 160)}`);
     return sendText(chatId, lines.length ? `آخر مراسلاتك:\n\n${lines.join("\n")}` : "ما عندك مراسلات سابقة.");
   }
-  if (!text) return sendText(chatId, "حالياً أرسل الرسائل النصية. أرسل /menu لعرض الخيارات.");
+  const body = messageBody(message);
+  if (!body) return sendText(chatId, "أرسل نصاً أو مرفقاً مدعوماً. أرسل /menu لعرض الخيارات.");
   const mode = employee.fields?.[EMP_MODE]?.name ?? employee.fields?.[EMP_MODE] ?? "لا شيء";
   let target: any = null;
   if (mode === "كتابة رسالة خاصة" && employee.fields?.[EMP_TARGET]) {
@@ -287,13 +323,13 @@ async function handlePrivateMessage(message: any, updateId: string) {
     recipientName = "الإدارة";
   }
   if (!recipientId) return sendText(chatId, "ما قدرنا نحدد حساب المستلم. تواصل مع الإدارة.");
-  const record = await saveMessage({ key: `TG-${updateId}`, senderName: nameOf(employee), recipientName, body: text, senderId: fromId, recipientId, telegramMessageId: String(message.message_id) });
+  const record = await saveMessage({ key: `TG-${updateId}`, senderName: nameOf(employee), recipientName, body, senderId: fromId, recipientId, telegramMessageId: String(message.message_id) });
   await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
   if (record._alreadyHandled && record.fields?.["fldZV0JboWBmWE4ns"] === "تم التسليم") {
     return sendText(chatId, "تم استلام رسالتك وإرسالها مسبقاً.");
   }
   try {
-    await deliver(record, recipientId, text, nameOf(employee), recipientName);
+    await deliver(record, recipientId, body, nameOf(employee), recipientName, message);
     await sendText(chatId, "تم إرسال رسالتك.");
   } catch (e) {
     console.error("Private message delivery failed", e);
@@ -302,9 +338,9 @@ async function handlePrivateMessage(message: any, updateId: string) {
 }
 
 async function handleGroupReply(message: any, updateId: string) {
-  const body = String(message.text ?? message.caption ?? "").trim();
+  const body = messageBody(message);
   if (!body) {
-    await sendText(message.chat.id, "اكتب نص الرد في رسالة نصية.");
+    await sendText(message.chat.id, "أرسل نص الرد أو مرفقاً مدعوماً.");
     return;
   }
   const actorId = String(message.from.id);
@@ -353,7 +389,7 @@ async function handleGroupReply(message: any, updateId: string) {
 async function saveGroupMessage(message: any, updateId: string) {
   const senderId = String(message.from?.id ?? "");
   const employee = await employeeByTelegram(senderId);
-  const body = String(message.text ?? message.caption ?? "").trim();
+  const body = messageBody(message);
   if (!body || !employee) return;
   const record = await saveMessage({ key: `TG-GROUP-${updateId}`, senderName: nameOf(employee), recipientName: "مجموعة الشركة", body, senderId, recipientId: env("ADMIN_TELEGRAM_ID"), telegramMessageId: String(message.message_id), kind: "إعلان عام", destination: "المجموعة" });
   await setMessageStatus(record.id, "تم التسليم");
