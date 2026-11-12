@@ -89,6 +89,7 @@ function normalizePhone(value: string) {
 async function saveMessage(args: {
   key: string; senderName: string; recipientName: string; body: string;
   senderId: string; recipientId: string; telegramMessageId?: string;
+  kind?: string; destination?: string;
 }) {
   const existingQuery = new URLSearchParams({
     filterByFormula: `{رقم المراسلة}='${formulaValue(args.key)}'`,
@@ -102,14 +103,14 @@ async function saveMessage(args: {
     "fldPh4CNH8yUHg1ab": args.key,
     "fldXGMB1LYq0p0XUj": args.senderName,
     "fldblgGsIlHJXVjH4": args.recipientName,
-    "fldB243DhpbqpqpT7": args.recipientName === "الإدارة" ? "رسالة للإدارة" : "رسالة لموظف",
+    "fldB243DhpbqpqpT7": args.kind ?? (args.recipientName === "الإدارة" ? "رسالة للإدارة" : "رسالة لموظف"),
     "fldn8q8IJ6PwfTo2a": args.body,
     "fldlGqy827cH3MnT4": new Date().toISOString(),
     "fldZV0JboWBmWE4ns": "جديدة",
     "fldKgUavji53gIds5": args.senderId,
     "fldBr35okGCqh66Zo": args.recipientId,
     "fld6YPZNzvd3m1u97": args.telegramMessageId ?? "",
-    "fldnTKFg2r0Nzk4zi": "خاص",
+    "fldnTKFg2r0Nzk4zi": args.destination ?? "خاص",
   };
   const data = await airtable(`${encodeURIComponent(MSG)}?returnFieldsByFieldId=true`, { method: "POST", body: JSON.stringify({ records: [{ fields }] }) });
   return data.records?.[0];
@@ -210,7 +211,7 @@ async function handleCallback(query: any) {
   }
   if (data.startsWith("to:")) {
     const target = await employeeByRecord(data.slice(3));
-    const targetId = String(target.fields?.[EMP_TG] ?? target.fields?.[EMP_CHAT] ?? "");
+    const targetId = String(target.fields?.[EMP_TG] || target.fields?.[EMP_CHAT] || "");
     if (!targetId || targetId === actorId) {
       await tg("answerCallbackQuery", { callback_query_id: query.id, text: "الموظف غير مرتبط أو لا يمكن مراسلة نفسك", show_alert: true });
       return;
@@ -276,7 +277,7 @@ async function handlePrivateMessage(message: any, updateId: string) {
   let recipientId = "";
   let recipientName = "";
   if (target) {
-    recipientId = String(target.fields?.[EMP_TG] ?? target.fields?.[EMP_CHAT] ?? "");
+    recipientId = String(target.fields?.[EMP_TG] || target.fields?.[EMP_CHAT] || "");
     recipientName = nameOf(target);
   } else if (isAdmin) {
     await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
@@ -354,7 +355,7 @@ async function saveGroupMessage(message: any, updateId: string) {
   const employee = await employeeByTelegram(senderId);
   const body = String(message.text ?? message.caption ?? "").trim();
   if (!body || !employee) return;
-  const record = await saveMessage({ key: `TG-GROUP-${updateId}`, senderName: nameOf(employee), recipientName: "مجموعة الشركة", body, senderId, recipientId: env("ADMIN_TELEGRAM_ID"), telegramMessageId: String(message.message_id) });
+  const record = await saveMessage({ key: `TG-GROUP-${updateId}`, senderName: nameOf(employee), recipientName: "مجموعة الشركة", body, senderId, recipientId: env("ADMIN_TELEGRAM_ID"), telegramMessageId: String(message.message_id), kind: "إعلان عام", destination: "المجموعة" });
   await setMessageStatus(record.id, "تم التسليم");
 }
 
