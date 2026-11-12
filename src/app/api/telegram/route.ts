@@ -189,7 +189,11 @@ ${body}`, keyboard);
 }
 
 async function showMenu(chatId: number, employee: any) {
-  const rows = [[{ text: "إرسال رسالة لموظف", callback_data: "new" }], [{ text: "مراسلاتي", callback_data: "inbox" }]];
+  const role = String(employee.fields?.[EMP_ROLE]?.name ?? employee.fields?.[EMP_ROLE] ?? "");
+  const isAdmin = ["مدير", "مدير النظام"].includes(role);
+  const rows = [[{ text: "إرسال رسالة لموظف", callback_data: "new" }]];
+  if (!isAdmin) rows.push([{ text: "مراسلة الإدارة", callback_data: "management" }]);
+  rows.push([{ text: "مراسلاتي", callback_data: "inbox" }]);
   await sendText(chatId, `حياك ${nameOf(employee)}. اختر الخدمة:`, { reply_markup: { inline_keyboard: rows } });
 }
 
@@ -245,9 +249,21 @@ async function handleCallback(query: any) {
     await handleNew(chatId);
     return;
   }
+  if (data === "management") {
+    const managerId = env("ADMIN_TELEGRAM_ID");
+    const manager = await employeeByTelegram(managerId);
+    if (!manager || !isActiveEmployee(manager) || manager.id === employee.id) {
+      await tg("answerCallbackQuery", { callback_query_id: query.id, text: "تعذر تحديد حساب الإدارة", show_alert: true });
+      return;
+    }
+    await updateEmployee(employee.id, { [EMP_MODE]: "كتابة رسالة خاصة", [EMP_TARGET]: manager.id });
+    await tg("answerCallbackQuery", { callback_query_id: query.id });
+    await sendText(chatId, "اكتب رسالتك للإدارة الآن. للإلغاء أرسل /cancel");
+    return;
+  }
   if (data === "inbox") {
     await tg("answerCallbackQuery", { callback_query_id: query.id });
-    const q = new URLSearchParams({ filterByFormula: `OR({معرّف المرسل السري}='${formulaValue(actorId)}',{معرّف المستلم السري}='${formulaValue(actorId)}')`, pageSize: "10", returnFieldsByFieldId: "true" });
+    const q = new URLSearchParams({ filterByFormula: `OR({معرّف المرسل السري}='${formulaValue(actorId)}',{معرّف المستلم السري}='${formulaValue(actorId)}')`, pageSize: "10", "sort[0][field]": "تاريخ ووقت الإرسال", "sort[0][direction]": "desc", returnFieldsByFieldId: "true" });
     const result = await airtable(`${encodeURIComponent(MSG)}?${q}`);
     const lines = (result.records ?? []).map((r: any) => `• ${r.fields?.fldXGMB1LYq0p0XUj ?? "—"} ← ${r.fields?.fldblgGsIlHJXVjH4 ?? "—"}: ${String(r.fields?.fldn8q8IJ6PwfTo2a ?? "").slice(0, 160)}`);
     await sendText(chatId, lines.length ? `آخر مراسلاتك:\n\n${lines.join("\n")}` : "ما عندك مراسلات سابقة.");
@@ -305,7 +321,7 @@ async function handlePrivateMessage(message: any, updateId: string) {
     return sendText(chatId, "تم إلغاء الإرسال.");
   }
   if (text === "/inbox") {
-    const q = new URLSearchParams({ filterByFormula: `OR({معرّف المرسل السري}='${formulaValue(fromId)}',{معرّف المستلم السري}='${formulaValue(fromId)}')`, pageSize: "10", returnFieldsByFieldId: "true" });
+    const q = new URLSearchParams({ filterByFormula: `OR({معرّف المرسل السري}='${formulaValue(fromId)}',{معرّف المستلم السري}='${formulaValue(fromId)}')`, pageSize: "10", "sort[0][field]": "تاريخ ووقت الإرسال", "sort[0][direction]": "desc", returnFieldsByFieldId: "true" });
     const result = await airtable(`${encodeURIComponent(MSG)}?${q}`);
     const lines = (result.records ?? []).map((r: any) => `• ${r.fields?.fldXGMB1LYq0p0XUj ?? "—"} ← ${r.fields?.fldblgGsIlHJXVjH4 ?? "—"}: ${String(r.fields?.fldn8q8IJ6PwfTo2a ?? "").slice(0, 160)}`);
     return sendText(chatId, lines.length ? `آخر مراسلاتك:\n\n${lines.join("\n")}` : "ما عندك مراسلات سابقة.");
