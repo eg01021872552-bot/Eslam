@@ -315,7 +315,7 @@ async function sendInbox(chatId: number, employee: any, actorId: string) {
     if (!deptId) return sendText(chatId, "حسابك غير مرتبط بقسم. تواصل مع الإدارة لتفعيل صلاحياتك.");
     const deptName = await departmentName(deptId);
     if (!deptName) return sendText(chatId, "تعذر تحديد قسم حسابك. تواصل مع الإدارة.");
-    formula = `FIND('${formulaValue(deptId)}', ARRAYJOIN({${MSG_DEPT}}))>0`;
+    formula = `FIND('${formulaValue(deptName)}', ARRAYJOIN({اسم القسم}))>0`;
   }
   const q = new URLSearchParams({ filterByFormula: formula, pageSize: "10", "sort[0][field]": "تاريخ ووقت الإرسال", "sort[0][direction]": "desc", returnFieldsByFieldId: "true" });
   const result = await airtable(`${encodeURIComponent(MSG)}?${q}`);
