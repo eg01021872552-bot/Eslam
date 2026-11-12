@@ -244,7 +244,7 @@ async function handlePrivateMessage(message: any, updateId: string) {
     return sendText(chatId, "تم إلغاء الإرسال.");
   }
   if (text === "/inbox") {
-    const q = new URLSearchParams({ filterByFormula: `OR({معرّف المرسل السري}='${formulaValue(fromId)}',{معرّف المستلم السري}='${formulaValue(fromId)}')`, pageSize: "10" });
+    const q = new URLSearchParams({ filterByFormula: `OR({معرّف المرسل السري}='${formulaValue(fromId)}',{معرّف المستلم السري}='${formulaValue(fromId)}')`, pageSize: "10", returnFieldsByFieldId: "true" });
     const result = await airtable(`${encodeURIComponent(MSG)}?${q}`);
     const lines = (result.records ?? []).map((r: any) => `• ${r.fields?.fldXGMB1LYq0p0XUj ?? "—"} ← ${r.fields?.fldblgGsIlHJXVjH4 ?? "—"}: ${String(r.fields?.fldn8q8IJ6PwfTo2a ?? "").slice(0, 160)}`);
     return sendText(chatId, lines.length ? `آخر مراسلاتك:\n\n${lines.join("\n")}` : "ما عندك مراسلات سابقة.");
