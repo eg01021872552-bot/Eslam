@@ -588,12 +588,28 @@ export async function GET(request: NextRequest) {
       info = await tg("getWebhookInfo", {});
       webhookRepaired = true;
     }
+    let adminGroupStatus = "not_configured";
+    const adminGroupId = env("COMPANY_GROUP_CHAT_ID");
+    if (adminGroupId) {
+      try {
+        const bot = await tg("getMe", {});
+        const membership = await tg("getChatMember", { chat_id: adminGroupId, user_id: bot.id });
+        adminGroupStatus = ["creator", "administrator", "member"].includes(String(membership.status))
+          ? "connected"
+          : String(membership.status ?? "unavailable");
+      } catch (groupError) {
+        console.error("Admin group health check failed", groupError);
+        adminGroupStatus = "unavailable";
+      }
+    }
     return NextResponse.json({
       ok: true,
       service: "employee-private-messaging",
       mode: "employee-private-dm-admin-group",
       webhookConfigured: Boolean(info.url),
       webhookMatchesEndpoint: info.url === expectedUrl,
+      adminGroupConfigured: Boolean(adminGroupId),
+      adminGroupStatus,
       webhookRepaired,
       pendingUpdates: info.pending_update_count ?? 0,
     });
