@@ -184,36 +184,22 @@ async function setMessageStatus(recordId: string, status: string, note?: string)
   await airtable(`${encodeURIComponent(MSG)}/${recordId}`, { method: "PATCH", body: JSON.stringify({ fields }) });
 }
 
-async function notifyDepartment(record: any, body: string, senderName: string, recipientName: string, source: any, departmentId: string) {
-  const recipients = new Set<string>();
-  const adminId = env("ADMIN_TELEGRAM_ID");
-  if (adminId) recipients.add(adminId);
-  const staff = await employees();
-  for (const person of staff) {
-    const role = String(person.fields?.[EMP_ROLE]?.name ?? person.fields?.[EMP_ROLE] ?? "");
-    if (role !== "مدير" || departmentIdOf(person) !== departmentId) continue;
-    const chat = String(person.fields?.[EMP_CHAT] || person.fields?.[EMP_TG] || "");
-    if (chat) recipients.add(chat);
-  }
-  recipients.delete(String(source?.from?.id ?? ""));
-  for (const chat of recipients) {
-    try {
-      if (source && hasCopyableContent(source)) await copyMessage(chat, source.chat.id, source.message_id);
-      else await sendText(chat, `إشعار قسم: ${senderName} إلى ${recipientName}\n\n${body}\n\nرقم المراسلة: ${record.id}`);
-    } catch (error) { console.error("Department notification failed", error); }
-  }
-}
 async function deliver(record: any, recipientId: string, body: string, senderName: string, recipientName: string, source?: any) {
   try {
-    const keyboard = { reply_markup: { inline_keyboard: [[{ text: "رد على الرسالة", callback_data: `reply:${record.id}` }]] } };
-    const sent = source && hasCopyableContent(source)
-      ? await copyMessage(recipientId, source.chat.id, source.message_id, keyboard)
-      : await sendText(recipientId, `رسالة من ${senderName}:
-
-${body}`, keyboard);
+    let sent: any;
+    if (recipientName === "الإدارة") {
+      const groupId = env("COMPANY_GROUP_CHAT_ID");
+      if (!groupId) throw new Error("Admin group chat ID is not configured");
+      const header = `رسالة جديدة من الموظف: ${senderName}\n\n${body}\n\nرقم المراسلة: ${record.id}\nللرد: اضغط رد على هذه الرسالة داخل جروب الإدارة.`;
+      sent = await sendText(groupId, header);
+      if (source && hasCopyableContent(source)) await copyMessage(groupId, source.chat.id, source.message_id);
+    } else {
+      const keyboard = { reply_markup: { inline_keyboard: [[{ text: "رد على الرسالة", callback_data: `reply:${record.id}` }]] } };
+      sent = source && hasCopyableContent(source)
+        ? await copyMessage(recipientId, source.chat.id, source.message_id, keyboard)
+        : await sendText(recipientId, `رسالة من ${senderName}:\n\n${body}`, keyboard);
+    }
     await setMessageStatus(record.id, "تم التسليم");
-    try { await notifyDepartment(record, body, senderName, recipientName, source, messageDepartmentIds(record)[0] ?? ""); }
-    catch (e) { console.error("Department notification failed", e); }
     return sent;
   } catch (e) {
     await setMessageStatus(record.id, "فشل الإرسال", String(e));
@@ -484,6 +470,7 @@ async function handlePrivateMessage(message: any, updateId: string) {
 }
 
 async function handleGroupReply(message: any, updateId: string) {
+  if (String(message.chat.id) !== env("COMPANY_GROUP_CHAT_ID")) return;
   const body = messageBody(message);
   if (!body) {
     await sendText(message.chat.id, "أرسل نص الرد أو مرفقاً مدعوماً.");
@@ -498,15 +485,20 @@ async function handleGroupReply(message: any, updateId: string) {
     return;
   }
   const repliedText = String(message.reply_to_message?.text ?? message.reply_to_message?.caption ?? "");
-  const match = repliedText.match(/رقم المراسلة:\s*(rec[A-Za-z0-9]{14})/);
+  const match = repliedText.match(/رقم المراسلة:\\s*(rec[A-Za-z0-9]{14})/);
   if (!match) {
-    await sendText(message.chat.id, "للرد على موظف، اضغط رد على نسخة المراسلة التي أرسلها البوت في الجروب.");
+    await sendText(message.chat.id, "للرد على موظف، اضغط رد على رسالة البوت التي تحتوي على رقم المراسلة.");
     return;
   }
   const original = await airtable(`${encodeURIComponent(MSG)}/${match[1]}?returnFieldsByFieldId=true`);
   const originalSenderId = String(original.fields?.["fldKgUavji53gIds5"] ?? "");
+  const originalRecipientId = String(original.fields?.["fldBr35okGCqh66Zo"] ?? "");
+  if (originalRecipientId !== env("ADMIN_TELEGRAM_ID")) {
+    await sendText(message.chat.id, "هذه المراسلة ليست رسالة واردة إلى الإدارة.");
+    return;
+  }
   const originalEmployee = await employeeByTelegram(originalSenderId);
-  if (!originalEmployee) {
+  if (!originalEmployee || !isActiveEmployee(originalEmployee)) {
     await sendText(message.chat.id, "تعذر تحديد الموظف صاحب المراسلة.");
     return;
   }
@@ -518,14 +510,16 @@ async function handleGroupReply(message: any, updateId: string) {
     senderId: actorId,
     recipientId: originalSenderId,
     telegramMessageId: String(message.message_id),
+    sourceChatId: String(message.chat.id),
     departmentId: departmentIdOf(originalEmployee),
   });
   if (record._alreadyHandled && record.fields?.["fldZV0JboWBmWE4ns"] === "تم التسليم") return;
   try {
     const replyKeyboard = { reply_markup: { inline_keyboard: [[{ text: "الرد على الإدارة", callback_data: `reply:${record.id}` }]] } };
     if (hasCopyableContent(message)) await copyMessage(originalSenderId, message.chat.id, message.message_id, replyKeyboard);
-    else await sendText(originalSenderId, `رد الإدارة:\\n\\n${body}`, replyKeyboard);
+    else await sendText(originalSenderId, `رد الإدارة:\n\n${body}`, replyKeyboard);
     await setMessageStatus(record.id, "تم التسليم");
+    await sendText(message.chat.id, `تم إرسال الرد إلى ${nameOf(originalEmployee)}.`);
   } catch (error) {
     await setMessageStatus(record.id, "فشل الإرسال", String(error));
     await sendText(message.chat.id, "تعذر توصيل الرد للموظف. تم تسجيل الخطأ للمراجعة.");
@@ -597,7 +591,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       service: "employee-private-messaging",
-      mode: "private-bot-dm-only",
+      mode: "employee-private-dm-admin-group",
       webhookConfigured: Boolean(info.url),
       webhookMatchesEndpoint: info.url === expectedUrl,
       webhookRepaired,
@@ -622,6 +616,10 @@ export async function POST(request: NextRequest) {
     if (!message?.chat || !message?.from || message.from.is_bot) return NextResponse.json({ ok: true });
     if (message.chat.type === "private") {
       await handlePrivateMessage(message, String(update.update_id));
+    } else if ((message.chat.type === "group" || message.chat.type === "supergroup") &&
+      String(message.chat.id) === env("COMPANY_GROUP_CHAT_ID") &&
+      message.reply_to_message) {
+      await handleGroupReply(message, String(update.update_id));
     }
     return NextResponse.json({ ok: true });
   } catch (error) {
