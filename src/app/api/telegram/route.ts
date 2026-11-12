@@ -96,7 +96,7 @@ async function saveMessage(args: {
     returnFieldsByFieldId: "true",
   });
   const existing = await airtable(`${encodeURIComponent(MSG)}?${existingQuery}`);
-  if (existing.records?.length) return existing.records[0];
+  if (existing.records?.length) return { ...existing.records[0], _alreadyHandled: true };
 
   const fields: Record<string, unknown> = {
     "fldPh4CNH8yUHg1ab": args.key,
@@ -288,12 +288,64 @@ async function handlePrivateMessage(message: any, updateId: string) {
   if (!recipientId) return sendText(chatId, "ما قدرنا نحدد حساب المستلم. تواصل مع الإدارة.");
   const record = await saveMessage({ key: `TG-${updateId}`, senderName: nameOf(employee), recipientName, body: text, senderId: fromId, recipientId, telegramMessageId: String(message.message_id) });
   await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
+  if (record._alreadyHandled && record.fields?.["fldZV0JboWBmWE4ns"] === "تم التسليم") {
+    return sendText(chatId, "تم استلام رسالتك وإرسالها مسبقاً.");
+  }
   try {
     await deliver(record, recipientId, text, nameOf(employee), recipientName);
     await sendText(chatId, "تم إرسال رسالتك.");
   } catch (e) {
     console.error("Private message delivery failed", e);
     await sendText(chatId, "تعذر إرسال الرسالة حالياً. تم تسجيلها لمراجعة الإدارة.");
+  }
+}
+
+async function handleGroupReply(message: any, updateId: string) {
+  const body = String(message.text ?? message.caption ?? "").trim();
+  if (!body) {
+    await sendText(message.chat.id, "اكتب نص الرد في رسالة نصية.");
+    return;
+  }
+  const actorId = String(message.from.id);
+  const adminRecord = await employeeByTelegram(actorId);
+  const role = String(adminRecord?.fields?.[EMP_ROLE]?.name ?? adminRecord?.fields?.[EMP_ROLE] ?? "");
+  const isAdmin = actorId === env("ADMIN_TELEGRAM_ID") || ["مدير", "مدير النظام"].includes(role);
+  if (!isAdmin) {
+    await sendText(message.chat.id, "الرد على مراسلات الموظفين متاح للإدارة فقط.");
+    return;
+  }
+  const repliedText = String(message.reply_to_message?.text ?? message.reply_to_message?.caption ?? "");
+  const match = repliedText.match(/رقم المراسلة:\\s*(rec[A-Za-z0-9]{14})/);
+  if (!match) {
+    await sendText(message.chat.id, "للرد على موظف، اضغط رد على نسخة المراسلة التي أرسلها البوت في الجروب.");
+    return;
+  }
+  const original = await airtable(`${encodeURIComponent(MSG)}/${match[1]}?returnFieldsByFieldId=true`);
+  const originalSenderId = String(original.fields?.["fldKgUavji53gIds5"] ?? "");
+  const originalEmployee = await employeeByTelegram(originalSenderId);
+  if (!originalEmployee) {
+    await sendText(message.chat.id, "تعذر تحديد الموظف صاحب المراسلة.");
+    return;
+  }
+  const record = await saveMessage({
+    key: `TG-GROUP-REPLY-${updateId}`,
+    senderName: nameOf(adminRecord) || "الإدارة",
+    recipientName: nameOf(originalEmployee),
+    body,
+    senderId: actorId,
+    recipientId: originalSenderId,
+    telegramMessageId: String(message.message_id),
+  });
+  if (record._alreadyHandled && record.fields?.["fldZV0JboWBmWE4ns"] === "تم التسليم") return;
+  try {
+    await sendText(originalSenderId, `رد الإدارة:\\n\\n${body}`, {
+      reply_markup: { inline_keyboard: [[{ text: "الرد على الإدارة", callback_data: `reply:${record.id}` }]] },
+    });
+    await setMessageStatus(record.id, "تم التسليم");
+  } catch (error) {
+    await setMessageStatus(record.id, "فشل الإرسال", String(error));
+    await sendText(message.chat.id, "تعذر توصيل الرد للموظف. تم تسجيل الخطأ للمراجعة.");
+    throw error;
   }
 }
 
@@ -306,8 +358,23 @@ async function saveGroupMessage(message: any, updateId: string) {
   await setMessageStatus(record.id, "تم التسليم");
 }
 
-export async function GET() {
-  return NextResponse.json({ ok: true, service: "employee-private-messaging", mode: "private-dm-peer-admin-group-copy" });
+export async function GET(request: NextRequest) {
+  try {
+    const info = await tg("getWebhookInfo", {});
+    const expectedUrl = new URL("/api/telegram", request.url).toString();
+    return NextResponse.json({
+      ok: true,
+      service: "employee-private-messaging",
+      mode: "private-dm-peer-admin-group-copy",
+      webhookConfigured: Boolean(info.url),
+      webhookMatchesEndpoint: info.url === expectedUrl,
+      pendingUpdates: info.pending_update_count ?? 0,
+      lastWebhookError: info.last_error_message ?? null,
+    });
+  } catch (error) {
+    console.error("Webhook health check failed", error);
+    return NextResponse.json({ ok: false, service: "employee-private-messaging" }, { status: 503 });
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -324,7 +391,7 @@ export async function POST(request: NextRequest) {
     const groupId = env("COMPANY_GROUP_CHAT_ID");
     if (String(message.chat.id) === String(groupId)) {
       if (message.reply_to_message) {
-        await sendText(message.chat.id, "للرد على موظف، استخدم زر «الرد على الموظف» أسفل نسخة المراسلة التي أرسلها البوت.");
+        await handleGroupReply(message, String(update.update_id));
       } else {
         await saveGroupMessage(message, String(update.update_id));
       }
