@@ -18,6 +18,8 @@ const EMP_MODE = "fld0XUBzsCx1MaEqO";
 const EMP_TARGET = "fldCYKrXjNEDfSyrg";
 const EMP_DEPT = "fldKpcxqlBQvb6ghN";
 const MSG_DEPT = "fldkwTgS7wPqSJpV6";
+const DEPT_GROUP_CHAT = "fldwXlQlXnr75eE79";
+const MSG_SOURCE_CHAT = "fldAr6w4UnA01SYXE";
 const DEPT_TABLE = "tblfmch4vVWwJnFO1";
 
 async function airtable(path: string, init: RequestInit = {}) {
@@ -146,7 +148,7 @@ function normalizePhone(value: string) {
 async function saveMessage(args: {
   key: string; senderName: string; recipientName: string; body: string;
   senderId: string; recipientId: string; telegramMessageId?: string;
-  departmentId: string; kind?: string; destination?: string;
+  departmentId: string; kind?: string; destination?: string; sourceChatId?: string;
 }) {
   const existingQuery = new URLSearchParams({
     filterByFormula: `{رقم المراسلة}='${formulaValue(args.key)}'`,
@@ -167,6 +169,7 @@ async function saveMessage(args: {
     "fldKgUavji53gIds5": args.senderId,
     "fldBr35okGCqh66Zo": args.recipientId,
     "fld6YPZNzvd3m1u97": args.telegramMessageId ?? "",
+    [MSG_SOURCE_CHAT]: args.sourceChatId ?? args.senderId,
     "fldnTKFg2r0Nzk4zi": args.destination ?? "خاص",
     [MSG_DEPT]: [args.departmentId],
   };
@@ -312,7 +315,7 @@ async function sendInbox(chatId: number, employee: any, actorId: string) {
     if (!deptId) return sendText(chatId, "حسابك غير مرتبط بقسم. تواصل مع الإدارة لتفعيل صلاحياتك.");
     const deptName = await departmentName(deptId);
     if (!deptName) return sendText(chatId, "تعذر تحديد قسم حسابك. تواصل مع الإدارة.");
-    formula = `FIND('${formulaValue(deptName)}', ARRAYJOIN({اسم القسم}))>0`;
+    formula = `FIND('${formulaValue(deptId)}', ARRAYJOIN({${MSG_DEPT}}))>0`;
   }
   const q = new URLSearchParams({ filterByFormula: formula, pageSize: "10", "sort[0][field]": "تاريخ ووقت الإرسال", "sort[0][direction]": "desc", returnFieldsByFieldId: "true" });
   const result = await airtable(`${encodeURIComponent(MSG)}?${q}`);
@@ -376,7 +379,7 @@ async function handleCallback(query: any) {
       await tg("answerCallbackQuery", { callback_query_id: query.id, text: "ما عندك صلاحية الاطلاع على هذه المراسلة", show_alert: true });
       return;
     }
-    const sender = String(record.fields?.["fldKgUavji53gIds5"] ?? "");
+    const sender = String(record.fields?.[MSG_SOURCE_CHAT] ?? record.fields?.["fldKgUavji53gIds5"] ?? "");
     const messageId = Number(record.fields?.["fld6YPZNzvd3m1u97"] ?? 0);
     if (sender && messageId) await copyMessage(chatId, sender, messageId);
     else await sendText(chatId, String(record.fields?.["fldn8q8IJ6PwfTo2a"] ?? "لا يوجد محتوى محفوظ."));
@@ -524,13 +527,27 @@ async function handleGroupReply(message: any, updateId: string) {
   }
 }
 
-async function saveGroupMessage(message: any, updateId: string) {
+async function handleDepartmentGroupMessage(message: any, updateId: string) {
+  const chatId = String(message.chat.id);
+  const groups = await airtable(`${encodeURIComponent(DEPT_TABLE)}?pageSize=100&returnFieldsByFieldId=true`);
+  const department = (groups.records ?? []).find((r: any) => String(r.fields?.[DEPT_GROUP_CHAT] ?? "").trim() === chatId);
+  if (!department) return;
+  const departmentId = String(department.id);
   const senderId = String(message.from?.id ?? "");
   const employee = await employeeByTelegram(senderId);
+  if (!employee || !isActiveEmployee(employee)) return;
+  const authorized = isGlobalAdmin(employee, senderId) || departmentIdOf(employee) === departmentId;
+  if (!authorized) { await sendText(chatId, "ما عندك صلاحية استخدام جروب هذا القسم."); return; }
   const body = messageBody(message);
-  if (!body || !employee) return;
-  const record = await saveMessage({ key: `TG-GROUP-${updateId}`, senderName: nameOf(employee), recipientName: "مجموعة الشركة", body, senderId, recipientId: env("ADMIN_TELEGRAM_ID"), telegramMessageId: String(message.message_id), departmentId: departmentIdOf(employee), kind: "إعلان عام", destination: "المجموعة" });
-  await setMessageStatus(record.id, "تم التسليم");
+  if (!body) return;
+  const record = await saveMessage({
+    key: `TG-DEPT-GROUP-${updateId}`,
+    senderName: nameOf(employee),
+    recipientName: "جروب " + String(department.fields?.["fldeOw0yyQ4o3iPlR"] ?? "القسم"),
+    body, senderId, recipientId: chatId, telegramMessageId: String(message.message_id),
+    sourceChatId: chatId, departmentId, kind: "إعلان عام", destination: "المجموعة",
+  });
+  if (!record._alreadyHandled) await setMessageStatus(record.id, "تم التسليم");
 }
 
 export async function GET(request: NextRequest) {
@@ -574,12 +591,11 @@ export async function POST(request: NextRequest) {
     }
     const message = update.message ?? update.edited_message;
     if (!message?.chat || !message?.from || message.from.is_bot) return NextResponse.json({ ok: true });
-    const groupId = env("COMPANY_GROUP_CHAT_ID");
-    if (String(message.chat.id) === String(groupId)) {
-      // Shared company groups are excluded from confidential department correspondence.
-      return NextResponse.json({ ok: true });
+    if (message.chat.type === "private") {
+      await handlePrivateMessage(message, String(update.update_id));
+    } else if (message.chat.type === "group" || message.chat.type === "supergroup") {
+      await handleDepartmentGroupMessage(message, String(update.update_id));
     }
-    if (message.chat.type === "private") await handlePrivateMessage(message, String(update.update_id));
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Telegram webhook failed", error);
