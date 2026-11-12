@@ -208,7 +208,7 @@ async function deliver(record: any, recipientId: string, body: string, senderNam
 
 ${body}`, keyboard);
     await setMessageStatus(record.id, "تم التسليم");
-    try { await notifyDepartment(record, body, senderName, recipientName, source, String(record.fields?.[MSG_DEPT]?.[0] ?? "")); }
+    try { await notifyDepartment(record, body, senderName, recipientName, source, messageDepartmentIds(record)[0] ?? ""); }
     catch (e) { console.error("Department notification failed", e); }
     return sent;
   } catch (e) {
