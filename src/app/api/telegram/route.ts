@@ -485,7 +485,7 @@ async function handleGroupReply(message: any, updateId: string) {
     return;
   }
   const repliedText = String(message.reply_to_message?.text ?? message.reply_to_message?.caption ?? "");
-  const match = repliedText.match(/رقم المراسلة:\\s*(rec[A-Za-z0-9]{14})/);
+  const match = repliedText.match(/رقم المراسلة:\s*(rec[A-Za-z0-9]{14})/);
   if (!match) {
     await sendText(message.chat.id, "للرد على موظف، اضغط رد على رسالة البوت التي تحتوي على رقم المراسلة.");
     return;
