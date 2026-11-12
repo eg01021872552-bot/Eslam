@@ -361,14 +361,26 @@ async function saveGroupMessage(message: any, updateId: string) {
 
 export async function GET(request: NextRequest) {
   try {
-    const info = await tg("getWebhookInfo", {});
+    let info = await tg("getWebhookInfo", {});
     const expectedUrl = new URL("/api/telegram", request.url).toString();
+    let webhookRepaired = false;
+    if (info.url !== expectedUrl || String(info.last_error_message ?? "").includes("401 Unauthorized")) {
+      await tg("setWebhook", {
+        url: expectedUrl,
+        secret_token: env("TELEGRAM_WEBHOOK_SECRET"),
+        allowed_updates: ["message", "callback_query", "edited_message"],
+        drop_pending_updates: false,
+      });
+      info = await tg("getWebhookInfo", {});
+      webhookRepaired = true;
+    }
     return NextResponse.json({
       ok: true,
       service: "employee-private-messaging",
       mode: "private-dm-peer-admin-group-copy",
       webhookConfigured: Boolean(info.url),
       webhookMatchesEndpoint: info.url === expectedUrl,
+      webhookRepaired,
       pendingUpdates: info.pending_update_count ?? 0,
       lastWebhookError: info.last_error_message ?? null,
     });
