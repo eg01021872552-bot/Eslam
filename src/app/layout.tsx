@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 
 export const metadata = {
-  title: "نظام مراسلات مجموعة الاتحاد الميسر",
-  description: "تسجيل مراسلات مجموعة الشركة فقط",
+  title: "نظام المراسلات الداخلية",
+  description: "تواصل الموظفين والإدارة عبر بوت تيليجرام مع سجل متابعة داخلي",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
