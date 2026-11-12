@@ -103,7 +103,7 @@ async function saveMessage(args: {
     "fld6YPZNzvd3m1u97": args.telegramMessageId ?? "",
     "fldnTKFg2r0Nzk4zi": "خاص",
   };
-  const data = await airtable(encodeURIComponent(MSG), { method: "POST", body: JSON.stringify({ records: [{ fields }] }) });
+  const data = await airtable(`${encodeURIComponent(MSG)}?returnFieldsByFieldId=true`, { method: "POST", body: JSON.stringify({ records: [{ fields }] }) });
   return data.records?.[0];
 }
 
@@ -173,7 +173,7 @@ async function handleNew(chatId: number) {
 
 async function handleCallback(query: any) {
   const actorId = String(query.from.id);
-  const chatId = query.message?.chat?.id;
+  const chatId = Number(actorId);
   const employee = await employeeByTelegram(actorId);
   if (!employee || String(employee.fields?.[EMP_LINK]?.name ?? employee.fields?.[EMP_LINK] ?? "") !== "مرتبط") {
     await tg("answerCallbackQuery", { callback_query_id: query.id, text: "اربط حسابك أولاً", show_alert: true });
@@ -187,7 +187,7 @@ async function handleCallback(query: any) {
   }
   if (data === "inbox") {
     await tg("answerCallbackQuery", { callback_query_id: query.id });
-    const q = new URLSearchParams({ filterByFormula: `OR({معرّف المرسل السري}='${formulaValue(actorId)}',{معرّف المستلم السري}='${formulaValue(actorId)}')`, pageSize: "10", sort: JSON.stringify([{ field: "fldlGqy827cH3MnT4", direction: "desc" }]) });
+    const q = new URLSearchParams({ filterByFormula: `OR({معرّف المرسل السري}='${formulaValue(actorId)}',{معرّف المستلم السري}='${formulaValue(actorId)}')`, pageSize: "10", returnFieldsByFieldId: "true" });
     const result = await airtable(`${encodeURIComponent(MSG)}?${q}`);
     const lines = (result.records ?? []).map((r: any) => `• ${r.fields?.fldXGMB1LYq0p0XUj ?? "—"} ← ${r.fields?.fldblgGsIlHJXVjH4 ?? "—"}: ${String(r.fields?.fldn8q8IJ6PwfTo2a ?? "").slice(0, 160)}`);
     await sendText(chatId, lines.length ? `آخر مراسلاتك:\n\n${lines.join("\n")}` : "ما عندك مراسلات سابقة.");
@@ -209,7 +209,7 @@ async function handleCallback(query: any) {
     const original = await airtable(`${encodeURIComponent(MSG)}/${data.slice(6)}?returnFieldsByFieldId=true`);
     const originalSender = String(original.fields?.["fldKgUavji53gIds5"] ?? "");
     const originalRecipient = String(original.fields?.["fldBr35okGCqh66Zo"] ?? "");
-    const admin = actorId === env("ADMIN_TELEGRAM_ID") || ["مدير", "مدير النظام"].includes(employee.fields?.[EMP_ROLE]?.name);
+    const admin = actorId === env("ADMIN_TELEGRAM_ID") || ["مدير", "مدير النظام"].includes(String(employee.fields?.[EMP_ROLE]?.name ?? employee.fields?.[EMP_ROLE] ?? ""));
     if (actorId !== originalRecipient && !admin) {
       await tg("answerCallbackQuery", { callback_query_id: query.id, text: "ما عندك صلاحية الرد على هذه الرسالة", show_alert: true });
       return;
@@ -257,7 +257,7 @@ async function handlePrivateMessage(message: any, updateId: string) {
   } else {
     target = null; // Default free-form message is sent to management.
   }
-  const isAdmin = fromId === env("ADMIN_TELEGRAM_ID") || ["مدير", "مدير النظام"].includes(employee.fields?.[EMP_ROLE]?.name);
+  const isAdmin = fromId === env("ADMIN_TELEGRAM_ID") || ["مدير", "مدير النظام"].includes(String(employee.fields?.[EMP_ROLE]?.name ?? employee.fields?.[EMP_ROLE] ?? ""));
   let recipientId = "";
   let recipientName = "";
   if (target) {
