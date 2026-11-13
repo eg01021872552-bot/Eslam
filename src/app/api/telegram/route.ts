@@ -290,7 +290,7 @@ async function handleNew(chatId: number, employee: any) {
   const rows = list.filter((r: any) =>
     r.id !== employee.id &&
     (r.fields?.[EMP_TG] || r.fields?.[EMP_CHAT]) &&
-    (globalAdmin || (!!ownDepartment && departmentIdOf(r) === ownDepartment))
+    (globalAdmin || isGlobalAdmin(r, String(r.fields?.[EMP_TG] ?? "")) || (!!ownDepartment && departmentIdOf(r) === ownDepartment))
   ).map((r: any) => ([{ text: nameOf(r), callback_data: `to:${r.id}` }]));
   if (!rows.length) return sendText(chatId, "ما فيه موظفين مرتبطين بالبوت حتى الآن.");
   await sendText(chatId, "اختر الموظف اللي تبي تراسله:", { reply_markup: { inline_keyboard: rows.slice(0, 90) } });
@@ -436,7 +436,8 @@ async function handlePrivateMessage(message: any, updateId: string) {
   let recipientId = "";
   let recipientName = "";
   if (target) {
-    if (!isGlobalAdmin(employee, fromId) && departmentIdOf(employee) !== departmentIdOf(target)) {
+    const targetIsManagement = isGlobalAdmin(target, String(target.fields?.[EMP_TG] ?? ""));
+    if (!isGlobalAdmin(employee, fromId) && !targetIsManagement && departmentIdOf(employee) !== departmentIdOf(target)) {
       await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
       return sendText(chatId, "لا يمكن إرسال مراسلات خارج قسمك.");
     }
