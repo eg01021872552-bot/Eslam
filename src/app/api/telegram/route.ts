@@ -343,13 +343,14 @@ async function handleCallback(query: any) {
     return;
   }
   if (data.startsWith("to:")) {
-    if (!isGlobalAdmin(employee, actorId)) {
+    const target = await employeeByRecord(data.slice(3));
+    const targetIsManagement = isGlobalAdmin(target, String(target.fields?.[EMP_TG] ?? ""));
+    if (!isGlobalAdmin(employee, actorId) && !targetIsManagement) {
       await tg("answerCallbackQuery", { callback_query_id: query.id, text: "مراسلة الموظفين متاحة للإدارة فقط", show_alert: true });
       return;
     }
-    const target = await employeeByRecord(data.slice(3));
     const targetId = String(target.fields?.[EMP_TG] || target.fields?.[EMP_CHAT] || "");
-    if (!isActiveEmployee(target) || (!isGlobalAdmin(employee, actorId) && (!departmentIdOf(employee) || departmentIdOf(employee) !== departmentIdOf(target)))) {
+    if (!isActiveEmployee(target) || (!isGlobalAdmin(employee, actorId) && !targetIsManagement && (!departmentIdOf(employee) || departmentIdOf(employee) !== departmentIdOf(target)))) {
       await tg("answerCallbackQuery", { callback_query_id: query.id, text: "ما عندك صلاحية مراسلة موظف خارج قسمك", show_alert: true });
       return;
     }
@@ -451,7 +452,8 @@ async function handlePrivateMessage(message: any, updateId: string) {
     recipientName = "الإدارة";
   }
   if (!recipientId) return sendText(chatId, "ما قدرنا نحدد حساب المستلم. تواصل مع الإدارة.");
-  const messageDepartmentId = target ? departmentIdOf(target) : departmentIdOf(employee);
+  const targetIsManagement = target && isGlobalAdmin(target, String(target.fields?.[EMP_TG] ?? ""));
+  const messageDepartmentId = target && !targetIsManagement ? departmentIdOf(target) : departmentIdOf(employee);
   if (!messageDepartmentId) return sendText(chatId, "تعذر تحديد القسم المرتبط بهذه المراسلة.");
   const record = await saveMessage({ key: `TG-${updateId}`, senderName: nameOf(employee), recipientName, body, senderId: fromId, recipientId, telegramMessageId: String(message.message_id), departmentId: messageDepartmentId });
   await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
