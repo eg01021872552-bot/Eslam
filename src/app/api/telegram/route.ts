@@ -213,6 +213,7 @@ async function showMenu(chatId: number, employee: any) {
   const rows: any[] = [];
   if (isAdmin) rows.push([{ text: "إرسال رسالة لموظف", callback_data: "new" }]);
   else rows.push([{ text: "مراسلة الإدارة", callback_data: "management" }]);
+  rows.push([{ text: "تواصل مع موظف", callback_data: "new" }]);
   rows.push([{ text: "مراسلاتي", callback_data: "inbox" }]);
   await sendText(chatId, `حياك ${nameOf(employee)}. اختر الخدمة:`, { reply_markup: { inline_keyboard: rows } });
 }
@@ -320,10 +321,6 @@ async function handleCallback(query: any) {
   }
   const data = String(query.data ?? "");
   if (data === "new") {
-    if (!isGlobalAdmin(employee, actorId)) {
-      await tg("answerCallbackQuery", { callback_query_id: query.id, text: "مراسلة الموظفين متاحة للإدارة فقط", show_alert: true });
-      return;
-    }
     await tg("answerCallbackQuery", { callback_query_id: query.id });
     await handleNew(chatId, employee);
     return;
