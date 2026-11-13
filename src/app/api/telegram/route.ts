@@ -186,21 +186,41 @@ async function setMessageStatus(recordId: string, status: string, note?: string)
 
 async function deliver(record: any, recipientId: string, body: string, senderName: string, recipientName: string, source?: any) {
   try {
-    let sent: any;
-    if (recipientName === "الإدارة") {
-      const groupId = env("COMPANY_GROUP_CHAT_ID");
-      if (!groupId) throw new Error("Admin group chat ID is not configured");
-      const header = `رسالة جديدة من الموظف: ${senderName}\n\n${body}\n\nرقم المراسلة: ${record.id}\nللرد: اضغط رد على هذه الرسالة داخل جروب الإدارة.`;
-      sent = await sendText(groupId, header);
-      if (source && hasCopyableContent(source)) await copyMessage(groupId, source.chat.id, source.message_id);
+    // Deliver the original message to its intended recipient first.
+    const recipientKeyboard = recipientName === "الإدارة"
+      ? { reply_markup: { inline_keyboard: [[{ text: "رد على الرسالة", callback_data: `reply:${record.id}` }]] } }
+      : { reply_markup: { inline_keyboard: [[{ text: "رد على الرسالة", callback_data: `reply:${record.id}` }]] } };
+    if (source && hasCopyableContent(source)) {
+      await copyMessage(recipientId, source.chat.id, source.message_id, recipientKeyboard);
     } else {
-      const keyboard = { reply_markup: { inline_keyboard: [[{ text: "رد على الرسالة", callback_data: `reply:${record.id}` }]] } };
-      sent = source && hasCopyableContent(source)
-        ? await copyMessage(recipientId, source.chat.id, source.message_id, keyboard)
-        : await sendText(recipientId, `رسالة من ${senderName}:\n\n${body}`, keyboard);
+      await sendText(recipientId, `رسالة من ${senderName}:\n\n${body}`, recipientKeyboard);
     }
+
+    // Every employee-to-employee message is also copied to the manager and marketing group.
+    // Do not send a duplicate to the manager when the manager is already the sender or recipient.
+    const managerId = env("ADMIN_TELEGRAM_ID");
+    const groupId = env("COMPANY_GROUP_CHAT_ID");
+    const sentTo = new Set<string>([String(recipientId), String(source?.chat?.id ?? "")]);
+    const timestamp = String(record.fields?.["fldlGqy827cH3MnT4"] ?? new Date().toISOString());
+    const destinations: Array<{ id: string; label: string; isGroup: boolean }> = [];
+    if (managerId && managerId !== String(source?.from?.id ?? "") && managerId !== String(recipientId)) {
+      destinations.push({ id: managerId, label: "نسخة للمدير", isGroup: false });
+    }
+    if (groupId && !sentTo.has(groupId)) {
+      destinations.push({ id: groupId, label: "نسخة لفريق التسويق", isGroup: true });
+    }
+
+    for (const destination of destinations) {
+      if (sentTo.has(destination.id)) continue;
+      const header = `${destination.label}\nمن: ${senderName}\nإلى: ${recipientName}\nالتاريخ والوقت: ${timestamp}\n\n${body}\n\nرقم المراسلة: ${record.id}`;
+      await sendText(destination.id, header);
+      if (source && hasCopyableContent(source)) {
+        await copyMessage(destination.id, source.chat.id, source.message_id);
+      }
+      sentTo.add(destination.id);
+    }
+
     await setMessageStatus(record.id, "تم التسليم");
-    return sent;
   } catch (e) {
     await setMessageStatus(record.id, "فشل الإرسال", String(e));
     throw e;
