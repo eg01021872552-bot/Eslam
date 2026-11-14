@@ -196,18 +196,14 @@ async function deliver(record: any, recipientId: string, body: string, senderNam
       await sendText(recipientId, `رسالة من ${senderName}:\n\n${body}`, recipientKeyboard);
     }
 
-    // Every employee-to-employee message is also copied to the manager and marketing group.
-    // Do not send a duplicate to the manager when the manager is already the sender or recipient.
+    // Employee-to-employee private messages are copied to the manager only.
+    // Never copy private employee correspondence into the marketing team group.
     const managerId = env("ADMIN_TELEGRAM_ID");
-    const groupId = env("COMPANY_GROUP_CHAT_ID");
     const sentTo = new Set<string>([String(recipientId), String(source?.chat?.id ?? "")]);
     const timestamp = String(record.fields?.["fldlGqy827cH3MnT4"] ?? new Date().toISOString());
     const destinations: Array<{ id: string; label: string; isGroup: boolean }> = [];
     if (managerId && managerId !== String(source?.from?.id ?? "") && managerId !== String(recipientId)) {
       destinations.push({ id: managerId, label: "نسخة للمدير", isGroup: false });
-    }
-    if (groupId && !sentTo.has(groupId)) {
-      destinations.push({ id: groupId, label: "نسخة لفريق التسويق", isGroup: true });
     }
 
     for (const destination of destinations) {
