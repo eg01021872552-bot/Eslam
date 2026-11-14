@@ -242,18 +242,17 @@ async function deliverBroadcast(record: any, body: string, senderName: string, s
     const all = await employees();
     const delivered = new Set<string>([senderId, String(source?.chat?.id ?? senderId)]);
     const recipients = all.filter((person: any) =>
-      person.id !== record._senderRecordId &&
       (person.fields?.[EMP_CHAT] || person.fields?.[EMP_TG])
     );
 
     for (const person of recipients) {
       const targetId = String(person.fields?.[EMP_CHAT] || person.fields?.[EMP_TG] || "");
       if (!targetId || delivered.has(targetId)) continue;
-      const header = `رسالة جماعية من ${senderName}:\n\n${body}`;
       if (source && hasCopyableContent(source)) {
+        await sendText(targetId, `رسالة جماعية من ${senderName}`);
         await copyMessage(targetId, source.chat.id, source.message_id);
       } else {
-        await sendText(targetId, header);
+        await sendText(targetId, `رسالة جماعية من ${senderName}:\n\n${body}`);
       }
       delivered.add(targetId);
     }
@@ -514,8 +513,8 @@ async function handlePrivateMessage(message: any, updateId: string) {
       recipientId: "ALL",
       telegramMessageId: String(message.message_id),
       departmentId,
-      kind: "رسالة جماعية",
-      destination: "الجميع",
+      kind: "إعلان عام",
+      destination: "المجموعة",
     });
     await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
     if (record._alreadyHandled && record.fields?.["fldZV0JboWBmWE4ns"] === "تم التسليم") {
