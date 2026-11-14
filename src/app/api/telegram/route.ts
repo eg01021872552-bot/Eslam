@@ -127,7 +127,7 @@ function canAccessMessage(employee: any, record: any, actorId: string): boolean 
   if (isGlobalAdmin(employee, actorId)) return true;
   const senderId = String(record?.fields?.["fldKgUavji53gIds5"] ?? "");
   const recipientId = String(record?.fields?.["fldBr35okGCqh66Zo"] ?? "");
-  return actorId === senderId || actorId === recipientId;
+  return actorId === senderId || actorId === recipientId || recipientId === "ALL";
 }
 function isActiveEmployee(employee: any) {
   const status = employee?.fields?.[EMP_STATUS]?.name ?? employee?.fields?.[EMP_STATUS];
@@ -228,14 +228,56 @@ async function deliver(record: any, recipientId: string, body: string, senderNam
 }
 
 async function showMenu(chatId: number, employee: any) {
-  const role = String(employee.fields?.[EMP_ROLE]?.name ?? employee.fields?.[EMP_ROLE] ?? "");
-  const isAdmin = isGlobalAdmin(employee, String(employee.fields?.[EMP_TG] ?? ""));
-  const rows: any[] = [];
-  if (isAdmin) rows.push([{ text: "إرسال رسالة لموظف", callback_data: "new" }]);
-  else rows.push([{ text: "مراسلة الإدارة", callback_data: "management" }]);
-  rows.push([{ text: "تواصل مع موظف", callback_data: "new" }]);
-  rows.push([{ text: "مراسلاتي", callback_data: "inbox" }]);
-  await sendText(chatId, `حياك ${nameOf(employee)}. اختر الخدمة:`, { reply_markup: { inline_keyboard: rows } });
+  const rows: any[] = [
+    [{ text: "رسالة جماعية لجميع الموظفين", callback_data: "broadcast" }],
+    [{ text: "رسالة خاصة لموظف", callback_data: "new" }],
+    [{ text: "مراسلة الإدارة", callback_data: "management" }],
+    [{ text: "مراسلاتي", callback_data: "inbox" }],
+  ];
+  await sendText(chatId, `حياك ${nameOf(employee)}. اختر نوع المراسلة:`, { reply_markup: { inline_keyboard: rows } });
+}
+
+async function deliverBroadcast(record: any, body: string, senderName: string, source: any, senderId: string) {
+  try {
+    const all = await employees();
+    const delivered = new Set<string>([senderId, String(source?.chat?.id ?? senderId)]);
+    const recipients = all.filter((person: any) =>
+      person.id !== record._senderRecordId &&
+      (person.fields?.[EMP_CHAT] || person.fields?.[EMP_TG])
+    );
+
+    for (const person of recipients) {
+      const targetId = String(person.fields?.[EMP_CHAT] || person.fields?.[EMP_TG] || "");
+      if (!targetId || delivered.has(targetId)) continue;
+      const header = `رسالة جماعية من ${senderName}:\n\n${body}`;
+      if (source && hasCopyableContent(source)) {
+        await copyMessage(targetId, source.chat.id, source.message_id);
+      } else {
+        await sendText(targetId, header);
+      }
+      delivered.add(targetId);
+    }
+
+    const managerId = env("ADMIN_TELEGRAM_ID");
+    const groupId = env("COMPANY_GROUP_CHAT_ID");
+    const timestamp = String(record.fields?.["fldlGqy827cH3MnT4"] ?? new Date().toISOString());
+    const destinations = [
+      { id: managerId, label: "نسخة للمدير" },
+      { id: groupId, label: "نسخة لمجموعة الإدارة" },
+    ];
+    for (const destination of destinations) {
+      if (!destination.id || delivered.has(destination.id)) continue;
+      await sendText(destination.id, `${destination.label}\nرسالة جماعية من: ${senderName}\nإلى: جميع الموظفين\nالتاريخ والوقت: ${timestamp}\n\n${body}\n\nرقم المراسلة: ${record.id}`);
+      if (source && hasCopyableContent(source)) {
+        await copyMessage(destination.id, source.chat.id, source.message_id);
+      }
+      delivered.add(destination.id);
+    }
+    await setMessageStatus(record.id, "تم التسليم");
+  } catch (error) {
+    await setMessageStatus(record.id, "فشل الإرسال", String(error));
+    throw error;
+  }
 }
 
 async function startLink(chatId: number) {
@@ -323,7 +365,8 @@ async function sendInbox(chatId: number, employee: any, actorId: string) {
   const allRecords = result.records ?? [];
   const records = (globalAdmin ? allRecords : allRecords.filter((r: any) =>
     String(r.fields?.["fldKgUavji53gIds5"] ?? "") === actorId ||
-    String(r.fields?.["fldBr35okGCqh66Zo"] ?? "") === actorId
+    String(r.fields?.["fldBr35okGCqh66Zo"] ?? "") === actorId ||
+    String(r.fields?.["fldBr35okGCqh66Zo"] ?? "") === "ALL"
   )).slice(0, 10);
   if (!records.length) return sendText(chatId, "ما فيه مراسلات مسجلة ضمن صلاحياتك.");
   const lines = records.map((r: any) => `من ${r.fields?.fldXGMB1LYq0p0XUj ?? "—"} إلى ${r.fields?.fldblgGsIlHJXVjH4 ?? "—"}: ${String(r.fields?.fldn8q8IJ6PwfTo2a ?? "").slice(0, 90)}`);
@@ -340,6 +383,12 @@ async function handleCallback(query: any) {
     return;
   }
   const data = String(query.data ?? "");
+  if (data === "broadcast") {
+    await updateEmployee(employee.id, { [EMP_MODE]: "كتابة رسالة جماعية", [EMP_TARGET]: "" });
+    await tg("answerCallbackQuery", { callback_query_id: query.id });
+    await sendText(chatId, "اكتب الرسالة اللي تبي توصل لجميع الموظفين. تقدر ترسل نص أو مرفق. للإلغاء أرسل /cancel");
+    return;
+  }
   if (data === "new") {
     await tg("answerCallbackQuery", { callback_query_id: query.id });
     await handleNew(chatId, employee);
@@ -365,10 +414,6 @@ async function handleCallback(query: any) {
   if (data.startsWith("to:")) {
     const target = await employeeByRecord(data.slice(3));
     const targetIsManagement = isGlobalAdmin(target, String(target.fields?.[EMP_TG] ?? ""));
-    if (!isGlobalAdmin(employee, actorId) && !targetIsManagement) {
-      await tg("answerCallbackQuery", { callback_query_id: query.id, text: "مراسلة الموظفين متاحة للإدارة فقط", show_alert: true });
-      return;
-    }
     const targetId = String(target.fields?.[EMP_TG] || target.fields?.[EMP_CHAT] || "");
     if (!isActiveEmployee(target) || (!isGlobalAdmin(employee, actorId) && !targetIsManagement && (!departmentIdOf(employee) || departmentIdOf(employee) !== departmentIdOf(target)))) {
       await tg("answerCallbackQuery", { callback_query_id: query.id, text: "ما عندك صلاحية مراسلة موظف خارج قسمك", show_alert: true });
@@ -454,6 +499,37 @@ async function handlePrivateMessage(message: any, updateId: string) {
     target = null; // Default free-form message is sent to management.
   }
   const isAdmin = isGlobalAdmin(employee, fromId);
+  if (mode === "كتابة رسالة جماعية") {
+    const departmentId = departmentIdOf(employee);
+    if (!departmentId) {
+      await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
+      return sendText(chatId, "تعذر تحديد القسم المرتبط بحسابك.");
+    }
+    const record = await saveMessage({
+      key: `TG-BROADCAST-${updateId}`,
+      senderName: nameOf(employee),
+      recipientName: "جميع الموظفين",
+      body,
+      senderId: fromId,
+      recipientId: "ALL",
+      telegramMessageId: String(message.message_id),
+      departmentId,
+      kind: "رسالة جماعية",
+      destination: "الجميع",
+    });
+    await updateEmployee(employee.id, { [EMP_MODE]: "لا شيء", [EMP_TARGET]: "" });
+    if (record._alreadyHandled && record.fields?.["fldZV0JboWBmWE4ns"] === "تم التسليم") {
+      return sendText(chatId, "تم إرسال هذه الرسالة الجماعية مسبقاً.");
+    }
+    try {
+      await deliverBroadcast(record, body, nameOf(employee), message, fromId);
+      await sendText(chatId, "تم إرسال الرسالة لجميع الموظفين المرتبطين بالبوت.");
+    } catch (error) {
+      console.error("Broadcast delivery failed", error);
+      await sendText(chatId, "تعذر إكمال إرسال الرسالة لجميع الموظفين. تم تسجيل الحالة لمراجعة الإدارة.");
+    }
+    return;
+  }
   let recipientId = "";
   let recipientName = "";
   if (target) {
@@ -625,7 +701,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       service: "employee-private-messaging",
-      mode: "employee-private-dm-admin-group",
+      mode: "employee-private-and-broadcast-messaging",
       webhookConfigured: Boolean(info.url),
       webhookMatchesEndpoint: info.url === expectedUrl,
       adminGroupConfigured: Boolean(adminGroupId),
