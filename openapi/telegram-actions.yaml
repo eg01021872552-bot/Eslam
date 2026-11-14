@@ -1,0 +1,53 @@
+openapi: 3.1.0
+info:
+  title: Etihad Almoyaser Telegram Messaging
+  version: 1.0.0
+  description: Send an authenticated private Telegram message to an active employee and save its delivery status in Airtable.
+servers:
+  - url: https://etihad-almoyaser-employee-bot.vercel.app
+paths:
+  /api/telegram/send:
+    post:
+      operationId: sendTelegramMessage
+      summary: Send a private Telegram message to an employee
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - employeeName
+                - text
+                - idempotencyKey
+              properties:
+                employeeName:
+                  type: string
+                  description: Exact employee name as stored in Airtable.
+                text:
+                  type: string
+                  maxLength: 4000
+                idempotencyKey:
+                  type: string
+                  maxLength: 120
+                  description: Unique key to prevent duplicate delivery.
+      responses:
+        "200":
+          description: Message delivered or previously delivered.
+        "401":
+          description: Unauthorized.
+        "404":
+          description: Employee not found or ambiguous.
+        "409":
+          description: Employee inactive, Telegram not linked, or duplicate request pending.
+        "502":
+          description: Telegram delivery failed; the record remains logged in Airtable.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: TELEGRAM_WEBHOOK_SECRET
